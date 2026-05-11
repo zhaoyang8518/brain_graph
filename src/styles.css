@@ -1,0 +1,256 @@
+:root {
+  color: #172033;
+  background: #f4f6f8;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 100vh;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-right: 1px solid #d9e0e8;
+  background: #ffffff;
+  padding: 22px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 32% 34%, #ffffff 0 8%, transparent 9%),
+    linear-gradient(135deg, #1d4ed8, #059669 52%, #f59e0b);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 19px;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+h3 {
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.brand p,
+.toolbar p,
+.insight p,
+.term-row small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.input-label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+textarea {
+  min-height: 360px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 12px;
+  color: #1e293b;
+  background: #fbfdff;
+  line-height: 1.45;
+}
+
+textarea:focus,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 10px;
+  color: #334155;
+  font-size: 13px;
+}
+
+#analyzeButton,
+.toolbar-actions button {
+  border: 1px solid #1d4ed8;
+  border-radius: 8px;
+  background: #1d4ed8;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.toolbar-actions button {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.stats div {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.stats strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.stats span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) 220px;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #d9e0e8;
+  background: #ffffff;
+  padding: 18px 22px;
+}
+
+.graph-panel {
+  min-height: 0;
+  background: #f8fafc;
+}
+
+#graphContainer {
+  width: 100%;
+  height: 100%;
+}
+
+.bottom-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.6fr);
+  gap: 18px;
+  border-top: 1px solid #d9e0e8;
+  background: #ffffff;
+  padding: 16px 22px;
+  overflow: hidden;
+}
+
+.insights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.insight {
+  min-height: 120px;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.insight.bridge {
+  border-left-color: #059669;
+}
+
+.insight.gap {
+  border-left-color: #f59e0b;
+}
+
+.insight strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.term-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 164px;
+  overflow: auto;
+}
+
+.term-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfdff;
+  color: #1e293b;
+  cursor: pointer;
+  min-height: 34px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.term-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

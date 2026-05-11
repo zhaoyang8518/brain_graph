@@ -1,0 +1,25 @@
+{
+  "name": "brain-graph",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.2",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "graphology": "^0.26.0",
+    "sigma": "^3.0.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.1",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.2"
+  }
+}
