@@ -52,7 +52,7 @@ export async function render3DGraph(
     .width(container.clientWidth)
     .height(container.clientHeight)
     .graphData(data)
-    .backgroundColor("#09090b") // Match zinc-950
+    .backgroundColor("#363636ff") // Match zinc-950
     .showNavInfo(false)
     .nodeLabel((node: any) => `${node.name}<br/>命中：${node.frequency}`)
     .nodeVal((node: any) => node.val)

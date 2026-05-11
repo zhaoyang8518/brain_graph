@@ -56,7 +56,7 @@ import {
 } from "./graph";
 import { render3DGraph, type Graph3DRenderer } from "./render3d";
 import { render2DGraph, type Graph2DRenderer } from "./render2d";
-import { applyGraphVisualEncoding, type NodeColorMode } from "./visualEncoding";
+import { applyGraphVisualEncoding, nodeColor, type NodeColorMode } from "./visualEncoding";
 import { loadLanguage, saveLanguage, translate, type Language, type MessageKey } from "./i18n";
 
 // Types
@@ -262,6 +262,7 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(projects[0]?.id ?? null);
   const [currentGraph, setCurrentGraph] = useState<BrainGraph | null>(null);
   const [viewMode, setViewMode] = useState<GraphViewMode>("2d");
+  const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [colorMode, setColorMode] = useState<NodeColorMode>("community");
   const [modelSettings, setModelSettings] = useState<ModelSettings>(loadModelSettings());
   const [status, setStatus] = useState<string>("");
@@ -817,8 +818,17 @@ export default function App() {
                 {currentGraph?.nodes.slice(0, 20).map((node, i) => (
                   <button
                     key={node.id}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg border bg-background hover:bg-accent hover:border-accent transition-all text-left group"
+                    className={cn(
+                      "flex items-center justify-between px-3 py-2 rounded-lg transition-all text-left group border-0 shadow-sm hover:brightness-110 active:scale-[0.98]",
+                      activeHighlightId === node.id && "ring-2 ring-white ring-offset-2 ring-offset-[#363636] z-10 scale-[1.02]"
+                    )}
+                    style={{
+                      backgroundColor: nodeColor(node, colorMode),
+                      color: "#ffffff",
+                      textShadow: "0 1px 2px rgba(0,0,0,0.2)"
+                    }}
                     onClick={() => {
+                      // 3D focus
                       const nodeObj = rendererRef.current?.instance.graphData().nodes.find((n: any) => n.id === node.id);
                       if (nodeObj) {
                         const distance = 80;
@@ -833,11 +843,22 @@ export default function App() {
                           700
                         );
                       }
+
+                      // 2D highlight toggle
+                      const isCurrentlyHighlighted = activeHighlightId === node.id;
+                      const nextId = isCurrentlyHighlighted ? null : node.id;
+                      setActiveHighlightId(nextId);
+                      if (renderer2dRef.current) {
+                        renderer2dRef.current.setHighlightedNode(nextId);
+                      }
+
                       selectNode(node.id);
                     }}
                   >
-                    <span className="text-[11px] font-medium truncate mr-2">{node.label}</span>
-                    <span className="text-[9px] font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{node.frequency}</span>
+                    <span className="text-[11px] font-bold truncate mr-2 drop-shadow-sm">{node.label}</span>
+                    <span className="text-[9px] font-bold bg-white/20 backdrop-blur-md px-1.5 py-0.5 rounded text-white border border-white/10">
+                      {node.frequency}
+                    </span>
                   </button>
                 ))}
               </div>

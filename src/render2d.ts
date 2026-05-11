@@ -1,9 +1,11 @@
-import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
+import Sigma from "sigma";
+import Graph from "graphology";
+import forceAtlas2 from "graphology-layout-forceatlas2";
 import type { BrainGraph } from "./graph";
-import { edgeWidthByWeight } from "./visualEncoding";
 
 export type Graph2DRenderer = {
   refresh: () => void;
+  setHighlightedNode: (nodeId: string | null) => void;
   destroy: () => void;
 };
 
@@ -13,186 +15,128 @@ export function render2DGraph(
   onNodeSelect: (nodeId: string) => void
 ): Graph2DRenderer {
   container.replaceChildren();
-  container.style.background = "#09090b";
+  container.style.background = "#363636ff";
 
-  const maxPagerank = Math.max(...graph.nodes.map((node) => node.pagerank), 0);
-  const importantLabels = new Set(
-    [...graph.nodes]
-      .sort((a, b) => b.pagerank - a.pagerank || b.frequency - a.frequency)
-      .slice(0, 60)
-      .map((node) => node.id)
-  );
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
-  const elements: ElementDefinition[] = [
-    ...graph.nodes.map((node) => ({
-      group: "nodes" as const,
-      data: {
-        id: node.id,
-        label: node.label,
-        color: node.color ?? "#60a5fa",
-        size: Math.max(18, Math.min(58, node.size ?? 24)),
-        frequency: node.frequency,
-        pagerank: node.pagerank,
-        labelVisible: importantLabels.has(node.id) ? node.label : ""
-      }
-    })),
-    ...graph.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)).map((edge) => ({
-      group: "edges" as const,
-      data: {
-        id: `${edge.source}\u0000${edge.target}`,
-        source: edge.source,
-        target: edge.target,
-        weight: edge.weight,
-        width: edgeWidthByWeight(edge.weight),
-        opacity: Math.max(0.18, Math.min(0.72, 0.16 + edge.weight * 0.08))
-      }
-    }))
-  ];
+  // 1. Initialize Graphology Graph
+  const g = new Graph();
 
-  const cy: Core = cytoscape({
-    container,
-    elements,
-    minZoom: 0.08,
-    maxZoom: 4,
-    wheelSensitivity: 0.18,
-    textureOnViewport: false,
-    hideEdgesOnViewport: false,
-    hideLabelsOnViewport: graph.nodes.length > 260,
-    autoungrabify: graph.nodes.length > 300,
-    pixelRatio: 1,
-    style: [
-      {
-        selector: "core",
-        style: {
-          "selection-box-color": "#60a5fa",
-          "selection-box-border-color": "#bfdbfe",
-          "selection-box-border-width": 1,
-          "selection-box-opacity": 0.16,
-          "active-bg-color": "#60a5fa",
-          "active-bg-opacity": 0.12,
-          "active-bg-size": 40,
-          "outside-texture-bg-color": "#09090b",
-          "outside-texture-bg-opacity": 1
-        }
-      },
-      {
-        selector: "node",
-        style: {
-          "background-color": "data(color)",
-          width: "data(size)",
-          height: "data(size)",
-          "border-width": 1.5,
-          "border-color": "rgba(248,250,252,0.85)",
-          label: "data(labelVisible)",
-          color: "#e5e7eb",
-          "font-size": 10,
-          "font-weight": 600,
-          "text-outline-color": "#09090b",
-          "text-outline-width": 2,
-          "text-valign": "center",
-          "text-halign": "center",
-          "overlay-opacity": 0,
-          "transition-property": "background-color, border-width, width, height",
-          "transition-duration": 120
-        }
-      },
-      {
-        selector: "node[pagerank > " + Math.max(maxPagerank * 0.65, 0.0001) + "]",
-        style: {
-          "font-size": 12
-        }
-      },
-      {
-        selector: "edge",
-        style: {
-          width: "data(width)",
-          "line-color": "rgba(148,163,184,0.42)",
-          "target-arrow-color": "rgba(148,163,184,0.42)",
-          opacity: 0.42,
-          "curve-style": "straight",
-          "overlay-opacity": 0
-        }
-      },
-      {
-        selector: "node:selected",
-        style: {
-          "border-width": 4,
-          "border-color": "#f8fafc"
-        }
-      },
-      {
-        selector: "node:selected, node:selected ~ node",
-        style: {
-          "z-index": 10
-        }
-      },
-      {
-        selector: ".faded",
-        style: {
-          opacity: 0.18
-        }
-      },
-      {
-        selector: ".neighbor",
-        style: {
-          opacity: 1
-        }
-      }
-    ],
-    layout: {
-      name: "grid",
-      animate: false,
-      fit: true,
-      padding: 48
-    } as any
+  // 2. Add Nodes
+  graph.nodes.forEach((node) => {
+    g.addNode(node.id, {
+      label: node.label,
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      size: Math.max(5, Math.min(25, (node.pagerank * 150) + 5)),
+      color: node.color ?? "#60a5fa",
+    });
   });
 
-  requestAnimationFrame(() => {
-    cy.resize();
-    cy.fit(undefined, 48);
-    if (graph.nodes.length <= 220) {
-      cy.layout({
-        name: "cose",
-        animate: false,
-        fit: true,
-        padding: 48,
-        idealEdgeLength: 90,
-        nodeRepulsion: 9000,
-        edgeElasticity: 90,
-        gravity: 0.16,
-        numIter: 600,
-        randomize: false
-      } as any).run();
+  // 3. Add Edges
+  const nodeIds = new Set(graph.nodes.map(n => n.id));
+  const edgeColor = "rgba(33, 33, 33, 0.08)";
+  const edgeHoverColor = "rgba(85, 85, 85, 0.3)";
+
+  graph.edges.forEach((edge) => {
+    if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) {
+      const edgeId = `${edge.source}-${edge.target}`;
+      if (!g.hasEdge(edgeId)) {
+        g.addEdgeWithKey(edgeId, edge.source, edge.target, {
+          size: 0.4,
+          color: edgeColor,
+        });
+      }
     }
   });
 
-  cy.on("tap", "node", (event) => {
-    const node = event.target;
-    onNodeSelect(node.id());
-    cy.elements().addClass("faded");
-    node.removeClass("faded").addClass("neighbor");
-    node.neighborhood().removeClass("faded").addClass("neighbor");
-  });
-  cy.on("tap", (event) => {
-    if (event.target === cy) {
-      cy.elements().removeClass("faded neighbor");
-    }
+  // 4. Initial Layout (Circular) to avoid overlapping before FA2
+  // or just let FA2 handle it from random
+
+  // 5. Initialize Sigma Renderer
+  const renderer = new Sigma(g, container, {
+    minCameraRatio: 0.1,
+    maxCameraRatio: 10,
+    labelFont: "Inter, system-ui, sans-serif",
+    labelWeight: "600",
+    labelColor: { color: "#e5e7eb" },
+    renderEdgeLabels: false,
+    defaultEdgeType: "line",
   });
 
+  // 6. Run ForceAtlas2 Layout
+  // We run it synchronously for a few iterations or use the dynamic one
+  const layoutSettings = forceAtlas2.inferSettings(g);
+
+  // Start the layout
+  let layoutInterval: any = null;
+
+  // For small graphs, run it once. For large, run it incrementally.
+  if (g.order < 500) {
+    forceAtlas2.assign(g, { iterations: 100, settings: layoutSettings });
+    renderer.refresh();
+  } else {
+    // Large graphs: start continuous layout
+    forceAtlas2.assign(g, { iterations: 50, settings: layoutSettings });
+    // We can also start a worker or just run it periodically
+    // But for a better UX, let's just do a heavy initial pass
+  }
+
+  // 7. Interaction
+  renderer.on("clickNode", ({ node }) => {
+    onNodeSelect(node);
+  });
+
+  // 8. Hover effect (optional enhancement)
+  let hoveredNode: string | null = null;
+  renderer.on("enterNode", ({ node }) => {
+    hoveredNode = node;
+    renderer.refresh();
+  });
+  renderer.on("leaveNode", () => {
+    hoveredNode = null;
+    renderer.refresh();
+  });
+
+  // Custom Reducer for visual effects (like highlighting)
+  renderer.setSetting("nodeReducer", (node, data) => {
+    const res = { ...data };
+    if (hoveredNode && node !== hoveredNode && !g.areNeighbors(node, hoveredNode)) {
+      res.color = "rgba(100, 116, 139, 0.2)";
+      res.label = "";
+    }
+    return res;
+  });
+
+  renderer.setSetting("edgeReducer", (edge, data) => {
+    const res = { ...data };
+    if (hoveredNode) {
+      if (g.hasExtremity(edge, hoveredNode)) {
+        res.color = edgeHoverColor;
+        res.size = (data.size || 1) * 2;
+      } else {
+        res.hidden = true;
+      }
+    }
+    return res;
+  });
+
+  // 9. Resize Handling
   const resizeObserver = new ResizeObserver(() => {
-    cy.resize();
-    cy.fit(undefined, 48);
+    renderer.refresh();
   });
   resizeObserver.observe(container);
 
   return {
     refresh() {
-      cy.resize();
-      cy.fit(undefined, 48);
+      renderer.refresh();
+    },
+    setHighlightedNode(nodeId: string | null) {
+      hoveredNode = nodeId;
+      renderer.refresh();
     },
     destroy() {
+      if (layoutInterval) clearInterval(layoutInterval);
       resizeObserver.disconnect();
-      cy.destroy();
+      renderer.kill();
       container.replaceChildren();
     }
   };
