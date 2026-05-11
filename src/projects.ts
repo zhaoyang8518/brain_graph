@@ -27,7 +27,7 @@ export function loadProjects(): ProjectInfo[] {
   if (!raw) return [];
   try {
     const projects = JSON.parse(raw);
-    return Array.isArray(projects) ? projects : [];
+    return Array.isArray(projects) ? projects.map(normalizeProject).filter(Boolean) as ProjectInfo[] : [];
   } catch {
     return [];
   }
@@ -74,4 +74,24 @@ export async function loadProjectGraph(projectPath: string): Promise<string | nu
 
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
+}
+
+function normalizeProject(value: any): ProjectInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const path = typeof value.path === "string" ? value.path : "";
+  if (!path) return null;
+  const name = typeof value.name === "string" && value.name ? value.name : path.split("/").pop() || path;
+  const id = typeof value.id === "string" && value.id ? value.id : path;
+  const documents = Array.isArray(value.documents)
+    ? value.documents
+        .filter((document: any) => document && typeof document === "object")
+        .map((document: any) => ({
+          path: String(document.path || ""),
+          name: String(document.name || document.path?.split("/").pop() || "Document"),
+          extension: String(document.extension || "").toLowerCase(),
+          size: Number(document.size || 0)
+        }))
+        .filter((document: ProjectDocument) => document.path)
+    : [];
+  return { id, name, path, documents };
 }

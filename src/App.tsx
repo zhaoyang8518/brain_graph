@@ -62,6 +62,9 @@ import { loadLanguage, saveLanguage, translate, type Language, type MessageKey }
 // Types
 import { GraphViewMode, SettingsSection } from "./types";
 
+// Assets
+import logoImage from "./assets/logo.png";
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -177,10 +180,20 @@ function pickImportantSentences(text: string, keywords: string[], limit: number)
 }
 
 function splitSentences(text: string): string[] {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[。！？.!?])\s+|(?<=[。！？])/u)
-    .map((sentence) => sentence.trim());
+  const normalized = text.replace(/\s+/g, " ");
+  const sentences: string[] = [];
+  let current = "";
+  for (const char of normalized) {
+    current += char;
+    if ("。！？.!?".includes(char)) {
+      const sentence = current.trim();
+      if (sentence) sentences.push(sentence);
+      current = "";
+    }
+  }
+  const tail = current.trim();
+  if (tail) sentences.push(tail);
+  return sentences;
 }
 
 function scoreSentence(sentence: string, keywords: string[]): number {
@@ -516,13 +529,13 @@ export default function App() {
         style={{ width: sidebarWidth }}
       >
         <div className="h-16 flex items-center px-6 border-b">
-          <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
-            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
-              <Box size={20} />
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-background border border-border rounded-xl flex items-center justify-center overflow-hidden shadow-sm shrink-0">
+              <img src={logoImage} alt="Logo" className="w-full h-full object-cover" />
             </div>
             <div className="min-w-0 leading-tight">
-              <div className="truncate">Brain Graph Documents</div>
-              <div className="truncate text-xs font-medium tracking-normal text-muted-foreground">Anshusoft Grove</div>
+              <div className="font-bold tracking-tight text-sm truncate">AnshuDoc</div>
+              <div className="truncate text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">Anshusoft Grove</div>
             </div>
           </div>
         </div>

@@ -103,6 +103,8 @@ const STOP_WORDS = new Set([
 
 const MODEL_CHUNK_SIZE = 8000;
 const MAX_MODEL_CHUNKS = 24;
+const MAX_GRAPH_NODES = 450;
+const MAX_GRAPH_EDGES = 1400;
 
 export async function buildBrainGraph(
   project: ProjectInfo,
@@ -166,17 +168,23 @@ export function buildBrainGraphFromTerms(concepts: TypedConcept[], windowSize = 
     }
   }
 
+  const selectedTerms = selectGraphTerms(frequencies, edgeWeights, MAX_GRAPH_NODES);
   const graph = new Graph({ type: "undirected", multi: false, allowSelfLoops: false });
-  for (const [term, frequency] of frequencies) {
+  for (const term of selectedTerms) {
+    const frequency = frequencies.get(term) ?? 0;
     graph.addNode(term, { label: term, frequency, kind: conceptKinds.get(term) ?? "Misc" });
   }
 
   const edges: GraphEdge[] = [];
-  for (const [key, weight] of edgeWeights) {
+  const sortedEdges = [...edgeWeights.entries()]
+    .map(([key, weight]) => ({ key, weight }))
+    .sort((a, b) => b.weight - a.weight);
+  for (const { key, weight } of sortedEdges) {
     const [source, target] = key.split("\u0000");
     if (!graph.hasNode(source) || !graph.hasNode(target)) continue;
     graph.addUndirectedEdgeWithKey(key, source, target, { weight });
     edges.push({ source, target, weight });
+    if (edges.length >= MAX_GRAPH_EDGES) break;
   }
 
   const pagerank = computePageRank(graph);
@@ -211,6 +219,29 @@ export function buildBrainGraphFromTerms(concepts: TypedConcept[], windowSize = 
       density: nodes.length > 1 ? (2 * edges.length) / (nodes.length * (nodes.length - 1)) : 0
     }
   };
+}
+
+function selectGraphTerms(
+  frequencies: Map<string, number>,
+  edgeWeights: Map<string, number>,
+  limit: number
+): Set<string> {
+  const scores = new Map<string, number>();
+  for (const [term, frequency] of frequencies) {
+    scores.set(term, frequency * 4);
+  }
+  for (const [key, weight] of edgeWeights) {
+    const [source, target] = key.split("\u0000");
+    scores.set(source, (scores.get(source) ?? 0) + weight);
+    scores.set(target, (scores.get(target) ?? 0) + weight);
+  }
+
+  return new Set(
+    [...scores.entries()]
+      .sort((a, b) => b[1] - a[1] || (frequencies.get(b[0]) ?? 0) - (frequencies.get(a[0]) ?? 0))
+      .slice(0, limit)
+      .map(([term]) => term)
+  );
 }
 
 export function serializeBrainGraph(brainGraph: BrainGraph): StoredBrainGraph {
