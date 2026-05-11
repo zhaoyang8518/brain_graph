@@ -101,6 +101,9 @@ const STOP_WORDS = new Set([
   "需要"
 ]);
 
+const MODEL_CHUNK_SIZE = 8000;
+const MAX_MODEL_CHUNKS = 24;
+
 export async function buildBrainGraph(
   project: ProjectInfo,
   settings: ModelSettings,
@@ -108,16 +111,30 @@ export async function buildBrainGraph(
 ): Promise<BrainGraph> {
   onProgress(10, "Reading project documents...");
   const input = await buildProjectGraphInput(project.path);
-  
+
   if (settings.enabled) {
-    onProgress(40, `Extracting concepts with ${settings.provider}...`);
-    const result = await extractConceptsWithModel(input.text, settings);
-    onProgress(80, "Building network...");
-    return buildBrainGraphFromTerms(result.concepts);
-  } else {
-    onProgress(60, "Analyzing text patterns...");
-    return buildBrainGraphFromText(input.text);
+    try {
+      const chunks = chunkMarkdownText(input.text, MODEL_CHUNK_SIZE).slice(0, MAX_MODEL_CHUNKS);
+      const modelConcepts: TypedConcept[] = [];
+      for (let index = 0; index < chunks.length; index += 1) {
+        const percent = 25 + Math.round((index / Math.max(1, chunks.length)) * 45);
+        onProgress(percent, `Extracting concepts with ${settings.provider} (${index + 1}/${chunks.length})...`);
+        const result = await extractConceptsWithModel(chunks[index], settings);
+        modelConcepts.push(...result.concepts);
+      }
+      onProgress(78, "Merging local and model concepts...");
+      const localTerms = tokenize(input.text || "").map((name) => ({ name, kind: "Term" }));
+      const mergedTerms = mergeLocalAndModelTerms(localTerms, modelConcepts);
+      onProgress(85, "Building network...");
+      return buildBrainGraphFromTerms(mergedTerms);
+    } catch (error) {
+      console.warn("Model extraction failed, falling back to local graph construction.", error);
+      onProgress(70, "Model unavailable, using local analysis...");
+    }
   }
+
+  onProgress(60, "Analyzing text patterns...");
+  return buildBrainGraphFromText(input.text);
 }
 
 export function buildBrainGraphFromText(text: string, windowSize = 4): BrainGraph {
@@ -241,7 +258,67 @@ function normalizeTerms(terms: TypedConcept[]): TypedConcept[] {
       kind: term.kind
     }))
     .filter((term) => term.name.length >= 2 && !STOP_WORDS.has(term.name))
-    .slice(0, 3000);
+    .slice(0, 5000);
+}
+
+function mergeLocalAndModelTerms(localTerms: TypedConcept[], modelConcepts: TypedConcept[]): TypedConcept[] {
+  const normalizedModel = normalizeTerms(modelConcepts);
+  if (normalizedModel.length === 0) return localTerms;
+
+  const modelKindByName = new Map<string, string>();
+  for (const concept of normalizedModel) {
+    modelKindByName.set(concept.name, concept.kind || "Misc");
+  }
+
+  const merged = localTerms.map((term) => {
+    const normalized = term.name.trim().toLowerCase().replace(/\s+/g, " ");
+    return {
+      name: term.name,
+      kind: modelKindByName.get(normalized) ?? term.kind
+    };
+  });
+
+  const localNames = new Set(merged.map((term) => term.name.trim().toLowerCase().replace(/\s+/g, " ")));
+  for (const concept of normalizedModel) {
+    if (localNames.has(concept.name)) {
+      merged.push(concept);
+      continue;
+    }
+    merged.push(concept, concept);
+  }
+
+  return merged.slice(0, 5000);
+}
+
+function chunkMarkdownText(text: string, maxChars: number): string[] {
+  const sections = text
+    .split(/(?=^#{1,4}\s+|^\s*# Document:\s+)/gm)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const section of sections.length ? sections : [text]) {
+    if (section.length > maxChars) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      for (let index = 0; index < section.length; index += maxChars) {
+        chunks.push(section.slice(index, index + maxChars));
+      }
+      continue;
+    }
+
+    if (current && current.length + section.length + 2 > maxChars) {
+      chunks.push(current);
+      current = "";
+    }
+    current = current ? `${current}\n\n${section}` : section;
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function tokenize(text: string): string[] {

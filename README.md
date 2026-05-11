@@ -1,79 +1,56 @@
-# 🧠 Brain Graph (脑图谱)
+# Brain Graph Documents
 
-[English](#english) | [中文](#中文)
+**English** | [中文](./README_zh.md)
 
 ---
 
-<a name="english"></a>
-## English
+**Brain Graph: A local-first, knowledge-graph-powered document intelligence platform.**
 
-**Transforming fragmented documents into a structured, interlinked network of concepts.**
+Brain Graph transforms fragmented documents into a structured, interlinked network of concepts. It doesn't just store information; it **compiles** it. By integrating graph theory (PageRank, Community Detection) with modern LLMs, it reveals the "hidden architecture" of your projects, research, and data.
 
-Brain Graph is a local-first, knowledge-graph-powered document intelligence platform. It’s not just a visualization tool; it’s a **cognitive co-processor** for your data. By combining graph theory (PageRank, Community Detection) with modern LLMs, it reveals the "hidden structure" of your projects, documents, and research notes.
+### 🎯 The Philosophy
+*   **Knowledge Compounding**: Unlike traditional RAG that rediscovers knowledge on every query, Brain Graph maintains a persistent, evolving wiki-layer.
+*   **Graph-First Architecture**: The graph is the core index, enabling structural insights that flat text search can't provide.
+*   **Local-First & Private**: Full control over your data. Optimized for local LLMs like Ollama.
 
 ### ✨ Key Features
-*   **Intelligent Ingestion**: Structured PDF parsing via `unpdf`, preserving headings and tables for high-fidelity LLM analysis.
-*   **Graph-Driven Insights**: Automatic entity/relationship extraction and community detection to group related topics.
-*   **LLM-Powered Intelligence**:
-    *   **Smart Summaries**: Hierarchical project overviews generated from graph structures.
-    *   **GraphRAG**: Query your knowledge base using graph paths for complex logical reasoning.
-    *   **Mindmap Generation**: Export graph topologies directly to Markdown/Mermaid mindmaps.
-*   **3D Workspace**: Silky smooth 3D force-directed graph rendering for panoramic knowledge exploration.
-*   **Local-First**: Your data stays on your machine. Compatible with Ollama, DeepSeek, Gemini, and more.
+*   **Smart Ingestion**: Support for PDF, Markdown, and Office formats, automatically preserving document hierarchy for better LLM context.
+*   **Structural Intelligence**: 
+    *   **Community Detection**: Auto-detects topic clusters.
+    *   **Graph Algorithms**: Built-in PageRank and Bridge Score to find influencers and connectors.
+*   **LLM Synergy**:
+    *   **Project Summaries**: Hierarchical MD summaries derived from the graph topology.
+    *   **GraphRAG (Coming Soon)**: Multi-hop reasoning across your documents.
+    *   **Mindmap Export**: Convert graph branches into Mermaid/Markdown mindmaps.
+*   **Immersive Workspace**: 
+    *   **Hybrid View**: Seamless switching between 2D clarity and 3D panoramic exploration.
+    *   **Pro UI**: Resizable layouts, theme-aware Shadcn components, and smooth 60fps rendering.
 
 ### 🚀 Quick Start
-1.  **Clone & Install**:
+1.  **Prerequisites**:
+    *   Ensure Rust, Node.js, and pnpm are installed.
+2.  **Clone & Install**:
     ```bash
     git clone https://github.com/zhaoyang8518/brain_graph.git
     cd brain_graph
     pnpm install
     ```
-2.  **Run**:
+3.  **Run**:
     ```bash
     pnpm tauri dev
     ```
 
 ---
 
-<a name="中文"></a>
-## 中文
-
-**将零散的文档转化为结构化的概念互联网络。**
-
-Brain Graph 是一款本地优先、基于知识图谱驱动的文档智能平台。它不只是一个可视化工具，而是你的 **“认知协同处理器”**。通过将图谱论（PageRank、社区检测）与现代大语言模型（LLM）深度融合，它能揭示你项目、文档和研究笔记中隐藏的知识结构。
-
-### ✨ 核心功能
-*   **智能解析**：利用 `unpdf` 深度解析 PDF，保留标题与列表，为 LLM 提供高保真输入。
-*   **图谱驱动洞察**：自动抽取实体与关系，通过社区检测算法识别知识簇（主题岛屿）。
-*   **大模型增强**：
-    *   **智能摘要**：基于图谱层级自动生成深度项目综述。
-    *   **图谱问答 (GraphRAG)**：利用图谱路径关系回答复杂逻辑问题，超越传统的向量检索。
-    *   **思维导图导出**：一键将图谱拓扑转换为 Markdown/Mermaid 格式的思维导图。
-*   **3D 工作空间**：极速 3D 力导向图渲染，支持全景式的知识探索。
-*   **本地优先**：数据不出本地。完美适配 Ollama、DeepSeek、Gemini 等主流模型。
-
-### 🚀 快速开始
-1.  **克隆并安装**:
-    ```bash
-    git clone https://github.com/zhaoyang8518/brain_graph.git
-    cd brain_graph
-    pnpm install
-    ```
-2.  **启动**:
-    ```bash
-    pnpm tauri dev
-    ```
-
----
-
-## 🛠️ Technology Stack / 技术栈
-*   **Backend**: Tauri (Rust)
-*   **Frontend**: React + Vite + TypeScript
-*   **UI**: Shadcn/ui + Tailwind CSS v4
-*   **Graph Engine**: `3d-force-graph` & `graphology`
-*   **PDF Parser**: `unpdf` (Native Rust)
+## 🛠️ Technology Stack
+*   **Core**: Tauri (Rust Backend)
+*   **UI**: React + Vite + Shadcn/ui + Tailwind CSS v4
+*   **Graph**: `3d-force-graph` & `graphology`
+*   **Parsing**: `unpdf`, `calamine`, `quick-xml`
 
 ## 📄 License
-MIT License.
+This project is licensed under the MIT License.
 
-*“Reveal the invisible links between your thoughts. / 揭示你思想之间不可见的链接。”*
+---
+
+*“Reveal the invisible links between your thoughts.”*

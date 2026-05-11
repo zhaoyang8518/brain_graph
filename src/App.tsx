@@ -37,6 +37,7 @@ import {
   loadProjectGraph,
   saveProjectGraph,
   refreshProject,
+  buildProjectGraphInput,
   type ProjectInfo
 } from "./projects";
 import {
@@ -67,26 +68,18 @@ function clamp(value: number, min: number, max: number): number {
 
 type ContentMode = "graph" | "summary";
 
-function createProjectSummary(project: ProjectInfo, graph: BrainGraph): string {
-  const topNodes = graph.nodes.slice(0, 12);
-  const communities = new Map<number, typeof graph.nodes>();
-  for (const node of graph.nodes) {
-    const group = communities.get(node.community) ?? [];
-    group.push(node);
-    communities.set(node.community, group);
-  }
-  const communitySections = [...communities.entries()]
-    .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, 6)
-    .map(([community, nodes], index) => {
-      const labels = nodes
-        .sort((a, b) => b.frequency - a.frequency || b.pagerank - a.pagerank)
-        .slice(0, 10)
-        .map((node) => `${node.label}(${node.frequency})`)
-        .join("、");
-      return `### ${index + 1}. 主题簇 ${community + 1}\n\n- 规模：${nodes.length} 个概念\n- 代表概念：${labels || "暂无"}`;
-    })
-    .join("\n\n");
+type ParsedDocument = {
+  name: string;
+  path: string;
+  text: string;
+};
+
+function createProjectSummary(project: ProjectInfo, graph: BrainGraph, sourceText: string): string {
+  const documents = parseProjectDocuments(sourceText);
+  const keywords = graph.nodes
+    .slice(0, 24)
+    .map((node) => node.label)
+    .filter(Boolean);
   const extensionStats = project.documents.reduce<Record<string, number>>((acc, document) => {
     acc[document.extension] = (acc[document.extension] ?? 0) + 1;
     return acc;
@@ -95,31 +88,112 @@ function createProjectSummary(project: ProjectInfo, graph: BrainGraph): string {
     .sort((a, b) => b[1] - a[1])
     .map(([extension, count]) => `${extension.toUpperCase()} ${count}`)
     .join("、") || "暂无文档";
+  const allText = documents.map((document) => document.text).join("\n");
+  const overview = pickImportantSentences(allText, keywords, 5);
+  const documentSummaries = documents.slice(0, 20).map((document, index) => {
+    const headings = extractHeadings(document.text).slice(0, 8);
+    const points = pickImportantSentences(document.text, keywords, 4);
+    return [
+      `### ${index + 1}. ${document.name}`,
+      headings.length ? `- 主要章节：${headings.join("、")}` : "- 主要章节：未识别到明确标题",
+      points.length
+        ? points.map((point) => `- ${point}`).join("\n")
+        : "- 未提取到足够正文内容。"
+    ].join("\n");
+  }).join("\n\n");
+  const themeLines = keywords.slice(0, 12).map((keyword) => `- ${keyword}`);
 
   return [
-    `# ${project.name} 知识图谱摘要`,
+    `# ${project.name} 文档综合摘要`,
     "## 1. 项目概览",
     `- 文档数量：${project.documents.length}`,
     `- 文档类型：${documentLine}`,
-    `- 概念数量：${graph.stats.terms}`,
-    `- 关系数量：${graph.stats.links}`,
-    `- 主题簇数量：${graph.stats.communities}`,
-    `- 网络密度：${graph.stats.density.toFixed(3)}`,
-    "## 2. 核心概念",
-    topNodes.length
-      ? topNodes.map((node, index) => `${index + 1}. **${node.label}**：命中 ${node.frequency} 次，PageRank ${node.pagerank.toFixed(3)}，类型 ${node.kind}。`).join("\n")
-      : "暂无核心概念。",
-    "## 3. 主题结构",
-    communitySections || "暂无明显主题簇。",
-    "## 4. 结构洞察",
-    graph.insights.length
-      ? graph.insights.map((insight) => `- **${insight.title}**：${insight.detail}`).join("\n")
-      : "- 暂无洞察。",
-    "## 5. 后续分析建议",
-    "- 优先查看高频概念与高 PageRank 概念是否一致，用于识别核心主题和噪声词。",
-    "- 对桥接概念进行人工复核，它们通常代表跨主题连接、流程节点或潜在关键实体。",
-    "- 如果主题簇过少，补充差异化文档；如果主题簇过多，检查同义词归并和模型抽取质量。"
+    `- 已解析文档：${documents.length}`,
+    `- 正文规模：约 ${allText.length.toLocaleString()} 字符`,
+    "## 2. 综合摘要",
+    overview.length ? overview.map((sentence) => `- ${sentence}`).join("\n") : "- 当前项目文档正文不足，暂时无法形成可靠的综合摘要。",
+    "## 3. 主要主题",
+    themeLines.length ? themeLines.join("\n") : "- 暂无明确主题。",
+    "## 4. 分文档要点",
+    documentSummaries || "暂无可摘要文档。",
+    "## 5. 阅读建议",
+    "- 先阅读综合摘要和主要主题，建立项目整体上下文。",
+    "- 再按“分文档要点”定位具体文档，回到原文件查看细节。",
+    "- 如果摘要偏泛，建议启用 Ollama 或云模型，让模型基于解析后的文档正文生成更高质量摘要。"
   ].join("\n\n");
+}
+
+function parseProjectDocuments(sourceText: string): ParsedDocument[] {
+  return sourceText
+    .split(/\n{2,}# Document: /)
+    .map((section) => section.trim())
+    .filter(Boolean)
+    .map((section) => {
+      const lines = section.split("\n");
+      const name = lines.shift()?.replace(/^# Document:\s*/, "").trim() || "Untitled";
+      const pathLine = lines[0]?.startsWith("Path:") ? lines.shift() : "";
+      const path = pathLine?.replace(/^Path:\s*/, "").trim() || "";
+      return {
+        name,
+        path,
+        text: cleanDocumentText(lines.join("\n"))
+      };
+    })
+    .filter((document) => document.text.length > 0);
+}
+
+function cleanDocumentText(text: string): string {
+  return text
+    .replace(/\r/g, "")
+    .replace(/^Path:.*$/gm, "")
+    .replace(/^Type:.*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractHeadings(text: string): string[] {
+  const markdownHeadings = [...text.matchAll(/^#{1,4}\s+(.+)$/gm)].map((match) => match[1].trim());
+  if (markdownHeadings.length) return unique(markdownHeadings).slice(0, 12);
+  return unique(
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 4 && line.length <= 40 && !/[。！？.!?]$/.test(line))
+  ).slice(0, 12);
+}
+
+function pickImportantSentences(text: string, keywords: string[], limit: number): string[] {
+  const sentences = splitSentences(text)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 18 && sentence.length <= 220);
+  return unique(sentences)
+    .map((sentence) => ({
+      sentence,
+      score: scoreSentence(sentence, keywords)
+    }))
+    .sort((a, b) => b.score - a.score || a.sentence.length - b.sentence.length)
+    .slice(0, limit)
+    .map((item) => item.sentence);
+}
+
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[。！？.!?])\s+|(?<=[。！？])/u)
+    .map((sentence) => sentence.trim());
+}
+
+function scoreSentence(sentence: string, keywords: string[]): number {
+  const lower = sentence.toLowerCase();
+  const keywordScore = keywords.reduce((score, keyword) => {
+    return lower.includes(keyword.toLowerCase()) ? score + 3 : score;
+  }, 0);
+  const structureScore = /目标|问题|方案|建议|结论|背景|风险|流程|系统|数据|模型|实现/.test(sentence) ? 2 : 0;
+  return keywordScore + structureScore + Math.min(sentence.length / 80, 2);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
@@ -312,7 +386,9 @@ export default function App() {
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
-      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph) });
+      setBuildProgress({ percent: 92, message: "Generating document summary..." });
+      const input = await buildProjectGraphInput(project.path);
+      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
       setBuildProgress(null);
       setStatus(`Graph built for ${project.name}`);
     } catch (error) {
@@ -334,7 +410,9 @@ export default function App() {
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
-      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph) });
+      setBuildProgress({ percent: 92, message: "Generating document summary..." });
+      const input = await buildProjectGraphInput(project.path);
+      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
       setBuildProgress(null);
       setStatus(`Graph built for ${project.name}`);
     } catch (error) {
@@ -368,13 +446,18 @@ export default function App() {
     setProjectMenuId(null);
     if (mode !== "summary" || summaries[project.id]) return;
 
-    const graph = project.id === selectedProjectId && currentGraph
-      ? currentGraph
-      : await loadProjectGraph(project.path).then((graphJson) => graphJson ? hydrateBrainGraph(JSON.parse(graphJson)) : null);
-    if (!graph) return;
+    try {
+      const graph = project.id === selectedProjectId && currentGraph
+        ? currentGraph
+        : await loadProjectGraph(project.path).then((graphJson) => graphJson ? hydrateBrainGraph(JSON.parse(graphJson)) : null);
+      if (!graph) return;
 
-    setCurrentGraph(graph);
-    saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph) });
+      const input = await buildProjectGraphInput(project.path);
+      setCurrentGraph(graph);
+      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
+    } catch (error) {
+      setStatus(`Summary failed: ${error}`);
+    }
   };
 
   const handleSaveSettings = () => {
@@ -437,7 +520,10 @@ export default function App() {
             <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground">
               <Box size={20} />
             </div>
-            <span>Brain Graph</span>
+            <div className="min-w-0 leading-tight">
+              <div className="truncate">Brain Graph Documents</div>
+              <div className="truncate text-xs font-medium tracking-normal text-muted-foreground">Anshusoft Grove</div>
+            </div>
           </div>
         </div>
 

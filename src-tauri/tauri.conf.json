@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Brain Graph",
+  "productName": "Brain Graph Documents",
   "version": "0.1.0",
   "identifier": "com.zhaoyang.brain-graph",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Brain Graph",
+        "title": "Brain Graph Documents",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
