@@ -267,6 +267,7 @@ export default function App() {
   const [modelSettings, setModelSettings] = useState<ModelSettings>(loadModelSettings());
   const [status, setStatus] = useState<string>("");
   const [buildProgress, setBuildProgress] = useState<{ percent: number, message: string } | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [sidebarWidth, setSidebarWidth] = useState(288);
@@ -312,6 +313,8 @@ export default function App() {
   // Load graph when project changes
   const loadGraph = useCallback(async (project: ProjectInfo) => {
     try {
+      setCurrentGraph(null);
+      setIsInitialLoading(true);
       const graphJson = await loadProjectGraph(project.path);
       if (!graphJson) {
         setStatus(`${project.name}：${t("noSavedGraph")}`);
@@ -324,6 +327,8 @@ export default function App() {
     } catch (error) {
       console.error(error);
       setStatus(`Failed to load graph: ${error}`);
+    } finally {
+      setIsInitialLoading(false);
     }
   }, [t]);
 
@@ -461,6 +466,7 @@ export default function App() {
     if (mode !== "summary" || summaries[project.id]) return;
 
     try {
+      setIsInitialLoading(true);
       const graph = project.id === selectedProjectId && currentGraph
         ? currentGraph
         : await loadProjectGraph(project.path).then((graphJson) => graphJson ? hydrateBrainGraph(JSON.parse(graphJson)) : null);
@@ -471,6 +477,8 @@ export default function App() {
       saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
     } catch (error) {
       setStatus(`Summary failed: ${error}`);
+    } finally {
+      setIsInitialLoading(false);
     }
   };
 
@@ -743,12 +751,21 @@ export default function App() {
 
           {contentMode === "graph" && !currentGraph && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground p-12 text-center">
-              <Database size={48} className="mb-4 opacity-20" />
-              <h3 className="text-lg font-medium">{t("noSavedGraph")}</h3>
-              <p className="text-sm max-w-xs">{t("emptyStatus")}</p>
-              <Button variant="outline" className="mt-6" onClick={handleBuildGraph}>
-                {t("buildGraph")}
-              </Button>
+              {isInitialLoading ? (
+                <>
+                  <RefreshCw size={24} className="mb-4 opacity-20 animate-spin" />
+                  <h3 className="text-sm font-medium">{t("loadingData")}</h3>
+                </>
+              ) : (
+                <>
+                  <Database size={48} className="mb-4 opacity-20" />
+                  <h3 className="text-lg font-medium">{t("noSavedGraph")}</h3>
+                  <p className="text-sm max-w-xs">{t("emptyStatus")}</p>
+                  <Button variant="outline" className="mt-6" onClick={handleBuildGraph}>
+                    {t("buildGraph")}
+                  </Button>
+                </>
+              )}
             </div>
           )}
 
@@ -814,18 +831,17 @@ export default function App() {
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("topTerms")}</h3>
             </div>
             <ScrollArea className="flex-1">
-              <div className="grid grid-cols-2 gap-2 pr-4">
+              <div className="grid grid-cols-2 gap-3 p-1 pr-4">
                 {currentGraph?.nodes.slice(0, 20).map((node, i) => (
                   <button
                     key={node.id}
                     className={cn(
-                      "flex items-center justify-between px-3 py-2 rounded-lg transition-all text-left group border-0 shadow-sm hover:brightness-110 active:scale-[0.98]",
-                      activeHighlightId === node.id && "ring-2 ring-white ring-offset-2 ring-offset-[#363636] z-10 scale-[1.02]"
+                      "flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-left group border-2 border-transparent shadow-md hover:brightness-110 active:scale-[0.96]",
+                      activeHighlightId === node.id && "border-white/80 shadow-[0_0_15px_rgba(255,255,255,0.3)] z-10 scale-[1.05]"
                     )}
                     style={{
                       backgroundColor: nodeColor(node, colorMode),
                       color: "#ffffff",
-                      textShadow: "0 1px 2px rgba(0,0,0,0.2)"
                     }}
                     onClick={() => {
                       // 3D focus
@@ -855,8 +871,10 @@ export default function App() {
                       selectNode(node.id);
                     }}
                   >
-                    <span className="text-[11px] font-bold truncate mr-2 drop-shadow-sm">{node.label}</span>
-                    <span className="text-[9px] font-bold bg-white/20 backdrop-blur-md px-1.5 py-0.5 rounded text-white border border-white/10">
+                    <span className="text-[11px] font-bold truncate mr-2 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
+                      {node.label}
+                    </span>
+                    <span className="text-[9px] font-black bg-black/20 backdrop-blur-sm px-1.5 py-0.5 rounded-full text-white/90">
                       {node.frequency}
                     </span>
                   </button>

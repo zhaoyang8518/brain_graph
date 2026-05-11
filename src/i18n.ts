@@ -38,7 +38,8 @@ const messages = {
     colorCommunity: "社区配色",
     colorKind: "类别配色",
     enableModel: "启用模型提取",
-    modelName: "模型名称"
+    modelName: "模型名称",
+    loadingData: "数据加载中..."
   },
   en: {
     appSubtitle: "Project knowledge graph workspace",
@@ -75,7 +76,8 @@ const messages = {
     colorCommunity: "Community Color",
     colorKind: "Kind Color",
     enableModel: "Enable Model Extraction",
-    modelName: "Model Name"
+    modelName: "Model Name",
+    loadingData: "Loading data..."
   }
 } as const;
 
