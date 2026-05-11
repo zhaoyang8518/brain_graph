@@ -443,7 +443,7 @@ export default function App() {
 
         <ScrollArea className="flex-1 p-4">
           <div className="flex items-center justify-between mb-4 px-2">
-            <h2 className="text-[10px] uppercase tracking-widest font-bold text-muted-foreground">{t("projects")}</h2>
+            <h2 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("projects")}</h2>
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleAddProject}>
               <Plus size={14} />
             </Button>
@@ -617,11 +617,6 @@ export default function App() {
                 {t("heat")}
               </Button>
             </div>
-
-            <Button size="sm" className="gap-2 shadow-lg shadow-primary/20" onClick={handleBuildGraph} disabled={!selectedProject}>
-              <RefreshCw size={14} />
-              {t("buildGraph")}
-            </Button>
           </div>
         </header>
 

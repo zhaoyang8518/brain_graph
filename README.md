@@ -1,72 +1,63 @@
-# 🧠 Brain Graph
+# 🧠 Brain Graph (脑图谱)
 
-**Transforming unstructured text into interactive, LLM-powered knowledge networks.**
+**将非结构化文档转化为可交互、大模型驱动的知识网络。**
 
-Built with **Tauri + Sigma.js + Graphology**.
-
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri-f0f0f0.svg)](https://tauri.app/)
+Brain Graph 是一款专为深度信息分析设计的桌面应用。它不只是一个简单的可视化工具，而是你的 **“认知协同处理器”**。通过结合图谱论（PageRank, 社区检测）与现代大语言模型（LLM），它能揭示你项目、文档和研究笔记中隐藏的结构。
 
 ---
 
-## 📖 Overview
+## 🌟 核心理念
+*   **文档即图谱**：不再是散乱的文件，而是互联的概念网络。
+*   **复利式学习**：知识在图谱中不断沉淀与修正，而非每次重新检索。
+*   **结构化洞察**：利用拓扑算法识别关键节点与知识盲区。
 
-**Brain Graph** is a high-performance desktop application designed for deep information analysis. Unlike simple keyword clouds, Brain Graph uses advanced graph theory (PageRank, Community Detection) and modern LLMs to reveal the "hidden structure" of your projects, documents, and research notes.
+## ✨ 核心功能
 
-It's not just a visualization; it's a **cognitive co-processor** for your data.
+### 🔍 智能解析与抽取
+*   **结构化提取**：利用 `unpdf` 深度解析 PDF，保留标题与列表，提升 LLM 理解精度。
+*   **多模型支持**：无缝对接 **Ollama (本地), DeepSeek, Gemini, MiniMax** 等主流模型。
+*   **本地优先**：数据存储在本地，隐私受控。
 
-## ✨ Features
+### 📊 深度图谱分析
+*   **3D 全景视图**：极致流畅的 3D 力导向图，支持数千节点交互。
+*   **社区检测**：自动识别知识簇（Topic Islands），并以不同颜色编码。
+*   **拓扑算法**：内置 PageRank（识别核心概念）与 Bridge Score（寻找跨领域连接点）。
 
-### 🔍 Intelligent Analysis
-- **LLM-Powered Extraction**: Seamlessly integrate with **Ollama, DeepSeek, Gemini, MiniMax**, or any OpenAI-compatible API to extract high-level concepts rather than just raw tokens.
-- **Graph Theory Algorithms**: 
-  - **PageRank**: Identifies the "Dominant Concepts" in your text.
-  - **Community Detection**: Groups related terms into "Topic Islands."
-  - **Bridge Scores**: Finds the crucial concepts that connect disparate knowledge domains.
+### 💡 LLM 增强体验 (新)
+*   **智能摘要**：基于图谱层级自动生成项目综述与核心洞察。
+*   **图谱问答 (GraphRAG)**：利用实体间的路径关系回答复杂逻辑问题。
+*   **思维导图生成**：一键将图谱拓扑转换为思维导图（Markdown/Mermaid 格式）。
 
-### 🎨 Premium Visualization
-- **Sigma.js Rendering**: Silky smooth interaction even with thousands of nodes.
-- **Linear-Inspired UI**: A clean, dark-themed interface (#08090a) designed for focus and clarity.
-- **Interactive Insights**: Automated text summaries explaining your graph's structural gaps and bridge candidates.
+## 🚀 快速开始
 
-### 🛠️ Developer & Power User Friendly
-- **Local-First**: Your data stays on your machine.
-- **Multilingual**: Native optimization for both **English and Chinese** text processing.
-- **Tauri Architecture**: Extremely low memory footprint and high performance.
+### 安装环境
+1.  确保已安装 [Rust](https://www.rust-lang.org/)。
+2.  确保已安装 [Node.js](https://nodejs.org/)。
+3.  推荐安装 [pnpm](https://pnpm.io/)。
 
-## 🚀 Quick Start
+### 运行
+```bash
+# 克隆仓库
+git clone https://github.com/zhaoyang8518/brain_graph.git
+cd brain_graph
 
-### Installation
+# 安装依赖
+pnpm install
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/zhaoyang8518/brain_graph.git
-    cd brain_graph
-    ```
+# 启动开发环境
+pnpm tauri dev
+```
 
-2.  **Install dependencies**:
-    ```bash
-    pnpm install
-    ```
+## 🛠️ 技术栈
+*   **框架**: [Tauri](https://tauri.app/) (Rust 后端)
+*   **前端**: React + Vite + TypeScript
+*   **UI 组件**: Shadcn/ui + Tailwind CSS v4
+*   **图形引擎**: `3d-force-graph` & `graphology`
+*   **PDF 解析**: `unpdf` (Rust 原生)
 
-3.  **Run in development mode**:
-    ```bash
-    pnpm tauri dev
-    ```
-
-### Configuration
-- **Local Analysis**: Works out of the box using a built-in tokenizer.
-- **LLM Analysis**: Go to **Settings > Models** to configure your provider (e.g., set up Ollama for a fully private local workflow).
-
-## 🛠️ Technology Stack
-- **Framework**: [Tauri](https://tauri.app/) (Rust Backend)
-- **Frontend**: Vite + TypeScript
-- **Graph Engine**: [Sigma.js](https://www.sigmajs.org/) & [Graphology](https://graphology.github.io/)
-- **Styling**: Vanilla CSS (Modern Dark Theme)
-
-## 📄 License
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+## 📄 许可证
+本项目采用 **MIT 许可证**。详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-*“Reveal the invisible links between your thoughts.”*
+*“揭示你思想之间不可见的链接。”*

@@ -5,7 +5,7 @@ const LANGUAGE_KEY = "brain-graph:language";
 const messages = {
   zh: {
     appSubtitle: "项目知识图谱工作区",
-    projects: "项目",
+    projects: "文档库",
     settings: "设置",
     conceptNetwork: "概念网络",
     emptyStatus: "创建或选择一个项目来构建知识图谱。",
