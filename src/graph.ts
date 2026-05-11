@@ -1,4 +1,5 @@
 import Graph from "graphology";
+import { applyGraphVisualEncoding } from "./visualEncoding";
 
 export type GraphNode = {
   id: string;
@@ -95,19 +96,6 @@ const STOP_WORDS = new Set([
   "需要"
 ]);
 
-const COMMUNITY_COLORS = [
-  "#2563eb",
-  "#dc2626",
-  "#16a34a",
-  "#9333ea",
-  "#ea580c",
-  "#0891b2",
-  "#be123c",
-  "#4f46e5",
-  "#65a30d",
-  "#a16207"
-];
-
 export function buildBrainGraph(text: string, windowSize = 4): BrainGraph {
   return buildBrainGraphFromTerms(tokenize(text), windowSize);
 }
@@ -156,18 +144,7 @@ export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): Brain
 
   nodes.sort((a, b) => b.pagerank - a.pagerank);
   writeLayout(graph, nodes, edges);
-
-  for (const node of nodes) {
-    graph.mergeNodeAttributes(node.id, {
-      size: 4 + Math.sqrt(node.frequency) * 2 + node.pagerank * 60,
-      color: COMMUNITY_COLORS[node.community % COMMUNITY_COLORS.length],
-      label: node.label,
-      frequency: node.frequency,
-      pagerank: node.pagerank,
-      bridgeScore: node.bridgeScore,
-      community: node.community
-    });
-  }
+  applyGraphVisualEncoding(graph, nodes, edges, "community");
 
   const communityCount = new Set(nodes.map((node) => node.community)).size;
   return {
@@ -201,9 +178,7 @@ export function hydrateBrainGraph(stored: StoredBrainGraph): BrainGraph {
       frequency: node.frequency,
       pagerank: node.pagerank,
       bridgeScore: node.bridgeScore,
-      community: node.community,
-      size: 4 + Math.sqrt(node.frequency) * 2 + node.pagerank * 60,
-      color: COMMUNITY_COLORS[node.community % COMMUNITY_COLORS.length]
+      community: node.community
     });
   }
   for (const edge of stored.edges) {
@@ -213,16 +188,7 @@ export function hydrateBrainGraph(stored: StoredBrainGraph): BrainGraph {
     }
   }
   writeLayout(graph, stored.nodes, stored.edges);
-  for (const edge of stored.edges) {
-    const key = [edge.source, edge.target].sort().join("\u0000");
-    if (graph.hasEdge(key)) {
-      graph.mergeEdgeAttributes(key, {
-        weight: edge.weight,
-        size: Math.max(0.5, Math.log2(edge.weight + 1)),
-        color: "rgba(100, 116, 139, 0.35)"
-      });
-    }
-  }
+  applyGraphVisualEncoding(graph, stored.nodes, stored.edges, "community");
   return {
     graph,
     nodes: stored.nodes,
@@ -272,26 +238,36 @@ function computePageRank(graph: Graph): Map<string, number> {
 }
 
 function detectCommunities(graph: Graph): Map<string, number> {
-  const visited = new Set<string>();
-  const communities = new Map<string, number>();
-  let community = 0;
+  const nodes = graph.nodes().sort((a, b) => graph.degree(b) - graph.degree(a));
+  const labels = new Map(nodes.map((node, index) => [node, index]));
 
-  for (const start of graph.nodes().sort((a, b) => graph.degree(b) - graph.degree(a))) {
-    if (visited.has(start)) continue;
-    const queue = [start];
-    visited.add(start);
-    while (queue.length > 0) {
-      const node = queue.shift() as string;
-      communities.set(node, community);
-      for (const neighbor of graph.neighbors(node).sort((a, b) => graph.degree(b) - graph.degree(a))) {
-        if (visited.has(neighbor)) continue;
-        visited.add(neighbor);
-        queue.push(neighbor);
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    let changed = false;
+    for (const node of nodes) {
+      const scores = new Map<number, number>();
+      for (const neighbor of graph.neighbors(node)) {
+        const label = labels.get(neighbor) ?? 0;
+        const edge = graph.edge(node, neighbor);
+        const weight = edge ? Number(graph.getEdgeAttribute(edge, "weight") ?? 1) : 1;
+        scores.set(label, (scores.get(label) ?? 0) + weight);
+      }
+      const best = [...scores.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
+      if (best !== undefined && best !== labels.get(node)) {
+        labels.set(node, best);
+        changed = true;
       }
     }
-    community += 1;
+    if (!changed) break;
   }
 
+  const denseIds = new Map<number, number>();
+  let next = 0;
+  const communities = new Map<string, number>();
+  for (const node of nodes) {
+    const label = labels.get(node) ?? 0;
+    if (!denseIds.has(label)) denseIds.set(label, next++);
+    communities.set(node, denseIds.get(label) ?? 0);
+  }
   return communities;
 }
 
@@ -305,27 +281,72 @@ function computeBridgeScores(graph: Graph, communities: Map<string, number>): Ma
 }
 
 function writeLayout(graph: Graph, nodes: GraphNode[], edges: GraphEdge[]) {
-  const communityBuckets = new Map<number, GraphNode[]>();
-  for (const node of nodes) {
-    const bucket = communityBuckets.get(node.community) ?? [];
-    bucket.push(node);
-    communityBuckets.set(node.community, bucket);
+  const nodeIndex = new Map(nodes.map((node, index) => [node.id, index]));
+  const positions = new Map<string, { x: number; y: number }>();
+  const velocities = new Map<string, { x: number; y: number }>();
+  const radius = Math.max(6, Math.sqrt(nodes.length) * 4);
+  nodes.forEach((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
+    positions.set(node.id, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    velocities.set(node.id, { x: 0, y: 0 });
+  });
+
+  for (let iteration = 0; iteration < 180; iteration += 1) {
+    const temperature = 0.12 * (1 - iteration / 180);
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const pa = positions.get(a.id)!;
+        const pb = positions.get(b.id)!;
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const distanceSq = Math.max(0.01, dx * dx + dy * dy);
+        const force = (a.community === b.community ? 4 : 10) / distanceSq;
+        const distance = Math.sqrt(distanceSq);
+        const fx = (dx / distance) * force;
+        const fy = (dy / distance) * force;
+        velocities.get(a.id)!.x += fx;
+        velocities.get(a.id)!.y += fy;
+        velocities.get(b.id)!.x -= fx;
+        velocities.get(b.id)!.y -= fy;
+      }
+    }
+
+    for (const edge of edges) {
+      const source = nodes[nodeIndex.get(edge.source) ?? -1];
+      const target = nodes[nodeIndex.get(edge.target) ?? -1];
+      if (!source || !target) continue;
+      const ps = positions.get(source.id)!;
+      const pt = positions.get(target.id)!;
+      const dx = pt.x - ps.x;
+      const dy = pt.y - ps.y;
+      const distance = Math.max(0.1, Math.sqrt(dx * dx + dy * dy));
+      const ideal = source.community === target.community ? 4 : 8;
+      const force = (distance - ideal) * 0.015 * Math.log2(edge.weight + 2);
+      const fx = (dx / distance) * force;
+      const fy = (dy / distance) * force;
+      velocities.get(source.id)!.x += fx;
+      velocities.get(source.id)!.y += fy;
+      velocities.get(target.id)!.x -= fx;
+      velocities.get(target.id)!.y -= fy;
+    }
+
+    for (const node of nodes) {
+      const pos = positions.get(node.id)!;
+      const vel = velocities.get(node.id)!;
+      pos.x += vel.x * temperature;
+      pos.y += vel.y * temperature;
+      vel.x *= 0.72;
+      vel.y *= 0.72;
+    }
   }
 
-  const communities = [...communityBuckets.entries()];
-  communities.forEach(([, bucket], communityIndex) => {
-    const centerAngle = (Math.PI * 2 * communityIndex) / Math.max(communities.length, 1);
-    const centerRadius = communities.length > 1 ? 8 : 0;
-    const centerX = Math.cos(centerAngle) * centerRadius;
-    const centerY = Math.sin(centerAngle) * centerRadius;
-
-    bucket.forEach((node, nodeIndex) => {
-      const angle = (Math.PI * 2 * nodeIndex) / Math.max(bucket.length, 1);
-      const radius = 1.5 + Math.sqrt(bucket.length);
-      graph.setNodeAttribute(node.id, "x", centerX + Math.cos(angle) * radius);
-      graph.setNodeAttribute(node.id, "y", centerY + Math.sin(angle) * radius);
-    });
-  });
+  for (const node of nodes) {
+    const pos = positions.get(node.id)!;
+    graph.setNodeAttribute(node.id, "x", pos.x);
+    graph.setNodeAttribute(node.id, "y", pos.y);
+  }
 
   for (const edge of edges) {
     const key = [edge.source, edge.target].sort().join("\u0000");

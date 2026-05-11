@@ -27,9 +27,12 @@ import {
   type ProjectInfo
 } from "./projects";
 import { loadLanguage, saveLanguage, translate, type Language, type MessageKey } from "./i18n";
+import { render3DGraph, type Graph3DRenderer } from "./render3d";
+import { applyGraphVisualEncoding, type NodeColorMode } from "./visualEncoding";
 import "./styles.css";
 
 let renderer: Sigma | null = null;
+let renderer3d: Graph3DRenderer | null = null;
 let currentGraph: BrainGraph | null = null;
 let modelSettings: ModelSettings = loadModelSettings();
 let projects: ProjectInfo[] = loadProjects();
@@ -37,6 +40,8 @@ let selectedProjectId: string | null = projects[0]?.id ?? null;
 let buildInProgressProjectId: string | null = null;
 let language: Language = loadLanguage();
 let activeSettingsSection: "general" | "models" = "general";
+let nodeColorMode: NodeColorMode = "community";
+let graphViewMode: "2d" | "3d" = "2d";
 const t = (key: MessageKey) => translate(language, key);
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
@@ -71,6 +76,13 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <div>
           <h2 data-i18n="conceptNetwork">${t("conceptNetwork")}</h2>
           <p id="selectionSummary">${t("emptyStatus")}</p>
+        </div>
+        <div class="graph-controls" aria-label="Graph controls">
+          <button id="view2dButton" class="active" type="button">2D</button>
+          <button id="view3dButton" type="button">3D</button>
+          <span>颜色</span>
+          <button id="communityColorButton" class="active" type="button">主题</button>
+          <button id="frequencyColorButton" type="button">热度</button>
         </div>
       </header>
       <div class="graph-panel"><div id="graphContainer"></div></div>
@@ -168,6 +180,10 @@ const projectList = document.querySelector<HTMLDivElement>("#projectList")!;
 const buildProgress = document.querySelector<HTMLDivElement>("#buildProgress")!;
 const progressFill = document.querySelector<HTMLSpanElement>("#progressFill")!;
 const progressText = document.querySelector<HTMLParagraphElement>("#progressText")!;
+const communityColorButton = document.querySelector<HTMLButtonElement>("#communityColorButton")!;
+const frequencyColorButton = document.querySelector<HTMLButtonElement>("#frequencyColorButton")!;
+const view2dButton = document.querySelector<HTMLButtonElement>("#view2dButton")!;
+const view3dButton = document.querySelector<HTMLButtonElement>("#view3dButton")!;
 newProjectButton.addEventListener("click", addProject);
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -208,6 +224,10 @@ resetSettingsButton.addEventListener("click", () => {
 modelProvider.addEventListener("change", () => {
   applyProviderDefaults(modelProvider.value as ModelProvider);
 });
+communityColorButton.addEventListener("click", () => setNodeColorMode("community"));
+frequencyColorButton.addEventListener("click", () => setNodeColorMode("frequency"));
+view2dButton.addEventListener("click", () => setGraphViewMode("2d"));
+view3dButton.addEventListener("click", () => setGraphViewMode("3d"));
 
 async function analyze() {
   const selectedProject = getSelectedProject();
@@ -259,7 +279,7 @@ async function analyze() {
     renderProjects();
   }
 
-  renderGraph(currentGraph);
+  void renderGraph(currentGraph);
 }
 
 async function addProject() {
@@ -333,12 +353,26 @@ function renderProjectDocuments(project: ProjectInfo) {
   return list;
 }
 
-function renderGraph(graph: BrainGraph) {
+async function renderGraph(graph: BrainGraph) {
+  applyGraphVisualEncoding(graph.graph, graph.nodes, graph.edges, nodeColorMode);
   renderer?.kill();
+  renderer = null;
+  renderer3d?.destroy();
+  renderer3d = null;
+
+  if (graphViewMode === "3d") {
+    renderer3d = await render3DGraph(graph, graphContainer, nodeColorMode, selectNode);
+    renderStats(graph);
+    renderInsights(graph);
+    renderTopTerms(graph.nodes);
+    return;
+  }
+
   renderer = new Sigma(graph.graph, graphContainer, {
     renderEdgeLabels: false,
     labelDensity: 0.08,
     labelGridCellSize: 90,
+    hideEdgesOnMove: false,
     defaultEdgeType: "line",
     defaultNodeType: "circle",
     minCameraRatio: 0.1,
@@ -351,6 +385,22 @@ function renderGraph(graph: BrainGraph) {
   renderStats(graph);
   renderInsights(graph);
   renderTopTerms(graph.nodes);
+}
+
+function setNodeColorMode(mode: NodeColorMode) {
+  nodeColorMode = mode;
+  communityColorButton.classList.toggle("active", mode === "community");
+  frequencyColorButton.classList.toggle("active", mode === "frequency");
+  if (!currentGraph) return;
+  applyGraphVisualEncoding(currentGraph.graph, currentGraph.nodes, currentGraph.edges, nodeColorMode);
+  void renderGraph(currentGraph);
+}
+
+function setGraphViewMode(mode: "2d" | "3d") {
+  graphViewMode = mode;
+  view2dButton.classList.toggle("active", mode === "2d");
+  view3dButton.classList.toggle("active", mode === "3d");
+  if (currentGraph) void renderGraph(currentGraph);
 }
 
 function setBuildProgress(percent: number, message: string) {
@@ -405,7 +455,7 @@ async function loadGraphForProject(project: ProjectInfo) {
       return;
     }
     currentGraph = hydrateBrainGraph(JSON.parse(graphJson) as StoredBrainGraph);
-    renderGraph(currentGraph);
+    void renderGraph(currentGraph);
     setStatus(`Loaded saved graph for ${project.name}.`);
   } catch (error) {
     setStatus(`Failed to load saved graph. ${String(error)}`);

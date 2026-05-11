@@ -14,9 +14,11 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "3d-force-graph": "^1.80.0",
     "@tauri-apps/api": "^2.11.0",
     "graphology": "^0.26.0",
-    "sigma": "^3.0.3"
+    "sigma": "^3.0.3",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.1",
