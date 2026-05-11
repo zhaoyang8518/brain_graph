@@ -34,6 +34,13 @@ export type BrainGraph = {
   };
 };
 
+export type StoredBrainGraph = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  insights: GraphInsight[];
+  stats: BrainGraph["stats"];
+};
+
 const STOP_WORDS = new Set([
   "a",
   "an",
@@ -47,9 +54,11 @@ const STOP_WORDS = new Set([
   "from",
   "has",
   "have",
+  "like",
   "in",
   "is",
   "it",
+  "not",
   "of",
   "on",
   "or",
@@ -100,7 +109,11 @@ const COMMUNITY_COLORS = [
 ];
 
 export function buildBrainGraph(text: string, windowSize = 4): BrainGraph {
-  const tokens = tokenize(text);
+  return buildBrainGraphFromTerms(tokenize(text), windowSize);
+}
+
+export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): BrainGraph {
+  const tokens = normalizeTerms(terms);
   const frequencies = new Map<string, number>();
   const edgeWeights = new Map<string, number>();
 
@@ -169,6 +182,62 @@ export function buildBrainGraph(text: string, windowSize = 4): BrainGraph {
       density: nodes.length > 1 ? (2 * edges.length) / (nodes.length * (nodes.length - 1)) : 0
     }
   };
+}
+
+export function serializeBrainGraph(brainGraph: BrainGraph): StoredBrainGraph {
+  return {
+    nodes: brainGraph.nodes,
+    edges: brainGraph.edges,
+    insights: brainGraph.insights,
+    stats: brainGraph.stats
+  };
+}
+
+export function hydrateBrainGraph(stored: StoredBrainGraph): BrainGraph {
+  const graph = new Graph({ type: "undirected", multi: false, allowSelfLoops: false });
+  for (const node of stored.nodes) {
+    graph.addNode(node.id, {
+      label: node.label,
+      frequency: node.frequency,
+      pagerank: node.pagerank,
+      bridgeScore: node.bridgeScore,
+      community: node.community,
+      size: 4 + Math.sqrt(node.frequency) * 2 + node.pagerank * 60,
+      color: COMMUNITY_COLORS[node.community % COMMUNITY_COLORS.length]
+    });
+  }
+  for (const edge of stored.edges) {
+    const key = [edge.source, edge.target].sort().join("\u0000");
+    if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && !graph.hasEdge(key)) {
+      graph.addUndirectedEdgeWithKey(key, edge.source, edge.target, { weight: edge.weight });
+    }
+  }
+  writeLayout(graph, stored.nodes, stored.edges);
+  for (const edge of stored.edges) {
+    const key = [edge.source, edge.target].sort().join("\u0000");
+    if (graph.hasEdge(key)) {
+      graph.mergeEdgeAttributes(key, {
+        weight: edge.weight,
+        size: Math.max(0.5, Math.log2(edge.weight + 1)),
+        color: "rgba(100, 116, 139, 0.35)"
+      });
+    }
+  }
+  return {
+    graph,
+    nodes: stored.nodes,
+    edges: stored.edges,
+    insights: stored.insights,
+    stats: stored.stats
+  };
+}
+
+function normalizeTerms(terms: string[]): string[] {
+  return terms
+    .map((term) => term.trim().toLowerCase())
+    .map((term) => term.replace(/\s+/g, " "))
+    .filter((term) => term.length >= 2 && !STOP_WORDS.has(term))
+    .slice(0, 3000);
 }
 
 function tokenize(text: string): string[] {
