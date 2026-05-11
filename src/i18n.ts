@@ -27,7 +27,18 @@ const messages = {
     buildGraph: "构建图谱",
     refreshDocuments: "刷新文档",
     noSavedGraph: "该项目还没有已构建图谱。",
-    selectNode: "选择节点以查看局部上下文。"
+    selectNode: "选择节点以查看局部上下文。",
+    category: "分类",
+    theme: "主题",
+    heat: "热度",
+    ready: "准备就绪",
+    readingDocuments: "正在读取文档...",
+    cancel: "取消",
+    settingsSaved: "设置已保存",
+    colorCommunity: "社区配色",
+    colorKind: "类别配色",
+    enableModel: "启用模型提取",
+    modelName: "模型名称"
   },
   en: {
     appSubtitle: "Project knowledge graph workspace",
@@ -53,7 +64,18 @@ const messages = {
     buildGraph: "Build Graph",
     refreshDocuments: "Refresh Documents",
     noSavedGraph: "No graph built for this project yet.",
-    selectNode: "Select a node to inspect local context."
+    selectNode: "Select a node to inspect local context.",
+    category: "Category",
+    theme: "Theme",
+    heat: "Heat",
+    ready: "Ready",
+    readingDocuments: "Reading documents...",
+    cancel: "Cancel",
+    settingsSaved: "Settings saved",
+    colorCommunity: "Community Color",
+    colorKind: "Kind Color",
+    enableModel: "Enable Model Extraction",
+    modelName: "Model Name"
   }
 } as const;
 

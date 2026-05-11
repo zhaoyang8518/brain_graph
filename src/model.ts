@@ -10,8 +10,13 @@ export type ModelSettings = {
   apiKey: string;
 };
 
+export type TypedConcept = {
+  name: string;
+  kind: string;
+};
+
 export type ConceptExtractionResult = {
-  concepts: string[];
+  concepts: TypedConcept[];
   providerUsed: string;
 };
 
@@ -58,15 +63,24 @@ export async function extractConceptsWithModel(
 }
 
 function makeConceptPrompt(text: string): string {
-  return `Extract meaningful concepts and noun phrases from the text for a text network graph.
+  return `Extract meaningful concepts and their categories from the text for a knowledge graph.
+
+Categories to use (pick one for each concept):
+- Person: Named people or specific roles.
+- Organization: Companies, institutions, groups.
+- Technology: Tools, languages, frameworks, tech concepts.
+- Location: Places, cities, countries.
+- Event: Specific happenings or periods.
+- Metric: Measurable values, targets, or performance indicators.
+- Idea: Abstract concepts, theories, or opinions.
+- Misc: Anything else that is a distinct entity.
 
 Rules:
-- Remove function words, filler words, vague verbs, and generic terms.
-- Keep domain concepts, methods, objects, actors, metrics, problems, and important phrases.
-- Preserve repeated concepts when they appear repeatedly, because frequency matters for graph construction.
+- Remove function words, filler words, and vague generic terms.
+- Keep domain concepts, actors, and important phrases.
+- Preserve repeated concepts when they appear repeatedly (frequency matters).
 - Merge obvious aliases into one canonical phrase.
-- Use the original language of the concept.
-- Return JSON only, with this exact shape: {"concepts":["concept one","concept two"]}.
+- Return JSON only, with this exact shape: {"concepts":[{"name":"concept name","kind":"Category"}]}.
 - Include no explanations.
 
 Text:
@@ -166,14 +180,20 @@ async function extractWithGemini(
   };
 }
 
-function parseConceptJson(content: string): string[] {
+function parseConceptJson(content: string): TypedConcept[] {
   const jsonText = content.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
   const data = JSON.parse(jsonText);
   const concepts = Array.isArray(data) ? data : data.concepts;
   if (!Array.isArray(concepts)) throw new Error("Model response did not include concepts[]");
   return concepts
-    .map((concept) => String(concept).trim())
-    .filter((concept) => concept.length >= 2)
+    .map((item: any) => {
+      if (typeof item === "string") return { name: item.trim(), kind: "Misc" };
+      return {
+        name: String(item.name || item.concept || "").trim(),
+        kind: String(item.kind || item.category || item.type || "Misc").trim()
+      };
+    })
+    .filter((item) => item.name.length >= 2)
     .slice(0, 3000);
 }
 

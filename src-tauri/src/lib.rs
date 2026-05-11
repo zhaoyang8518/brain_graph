@@ -20,8 +20,15 @@ struct ModelSettings {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TypedConcept {
+    name: String,
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ConceptExtractionResult {
-    concepts: Vec<String>,
+    concepts: Vec<TypedConcept>,
     provider_used: String,
 }
 
@@ -269,9 +276,12 @@ fn read_document_text(path: &Path) -> Result<Option<String>, String> {
 }
 
 fn read_pdf_text(path: &Path) -> Result<String, String> {
-    pdf_extract::extract_text(path)
+    let document = unpdf::parse_file(path)
+        .map_err(|err| format!("PDF parsing failed for {}: {}", path.display(), err))?;
+    
+    unpdf::render::to_markdown(&document, &unpdf::render::RenderOptions::default())
         .map(|text| limit_text(text, 200_000))
-        .map_err(|err| format!("PDF extraction failed for {}: {}", path.display(), err))
+        .map_err(|err| format!("Markdown conversion failed for {}: {}", path.display(), err))
 }
 
 fn read_docx_text(path: &Path) -> Result<String, String> {
@@ -348,7 +358,17 @@ fn limit_text(text: String, max_chars: usize) -> String {
 fn make_concept_prompt(text: &str) -> String {
     let clipped: String = text.chars().take(12000).collect();
     format!(
-        r#"Extract meaningful concepts and noun phrases from the text for a text network graph.
+        r#"Extract meaningful concepts and their categories from the text for a knowledge graph.
+
+Categories to use (pick one for each concept):
+- Person: Named people or specific roles.
+- Organization: Companies, institutions, groups.
+- Technology: Tools, languages, frameworks, tech concepts.
+- Location: Places, cities, countries.
+- Event: Specific happenings or periods.
+- Metric: Measurable values, targets, or performance indicators.
+- Idea: Abstract concepts, theories, or opinions.
+- Misc: Anything else that is a distinct entity.
 
 Rules:
 - Remove function words, filler words, vague verbs, and generic terms.
@@ -356,7 +376,7 @@ Rules:
 - Preserve repeated concepts when they appear repeatedly, because frequency matters for graph construction.
 - Merge obvious aliases into one canonical phrase.
 - Use the original language of the concept.
-- Return JSON only, with this exact shape: {{"concepts":["concept one","concept two"]}}.
+- Return JSON only, with this exact shape: {{"concepts":[{{"name":"concept name","kind":"Category"}}]}}.
 - Include no explanations.
 
 Text:
@@ -487,7 +507,7 @@ async fn extract_with_gemini(
     })
 }
 
-fn parse_concepts(content: &str) -> Result<Vec<String>, String> {
+fn parse_concepts(content: &str) -> Result<Vec<TypedConcept>, String> {
     let cleaned = content
         .trim()
         .trim_start_matches("```json")
@@ -502,14 +522,38 @@ fn parse_concepts(content: &str) -> Result<Vec<String>, String> {
     }
     .ok_or_else(|| "Model response did not include concepts[]".to_string())?;
 
-    Ok(concepts
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| value.chars().count() >= 2)
-        .take(3000)
-        .map(String::from)
-        .collect())
+    let mut result = Vec::new();
+    for value in concepts.iter().take(3000) {
+        let concept = if let Some(name) = value.as_str() {
+            TypedConcept {
+                name: name.trim().to_string(),
+                kind: "Misc".to_string(),
+            }
+        } else {
+            let name = value
+                .get("name")
+                .or_else(|| value.get("concept"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let kind = value
+                .get("kind")
+                .or_else(|| value.get("category"))
+                .or_else(|| value.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("Misc")
+                .trim()
+                .to_string();
+            TypedConcept { name, kind }
+        };
+
+        if concept.name.chars().count() >= 2 {
+            result.push(concept);
+        }
+    }
+
+    Ok(result)
 }
 
 fn trim_slash(value: &str) -> &str {

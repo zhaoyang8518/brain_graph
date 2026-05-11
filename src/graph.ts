@@ -1,13 +1,18 @@
 import Graph from "graphology";
 import { applyGraphVisualEncoding } from "./visualEncoding";
+import { type TypedConcept, extractConceptsWithModel, type ModelSettings } from "./model";
+import { buildProjectGraphInput, type ProjectInfo } from "./projects";
 
 export type GraphNode = {
   id: string;
   label: string;
+  kind: string;
   frequency: number;
   pagerank: number;
   bridgeScore: number;
   community: number;
+  color?: string;
+  size?: number;
 };
 
 export type GraphEdge = {
@@ -96,22 +101,47 @@ const STOP_WORDS = new Set([
   "需要"
 ]);
 
-export function buildBrainGraph(text: string, windowSize = 4): BrainGraph {
-  return buildBrainGraphFromTerms(tokenize(text), windowSize);
+export async function buildBrainGraph(
+  project: ProjectInfo,
+  settings: ModelSettings,
+  onProgress: (percent: number, message: string) => void
+): Promise<BrainGraph> {
+  onProgress(10, "Reading project documents...");
+  const input = await buildProjectGraphInput(project.path);
+  
+  if (settings.enabled) {
+    onProgress(40, `Extracting concepts with ${settings.provider}...`);
+    const result = await extractConceptsWithModel(input.text, settings);
+    onProgress(80, "Building network...");
+    return buildBrainGraphFromTerms(result.concepts);
+  } else {
+    onProgress(60, "Analyzing text patterns...");
+    return buildBrainGraphFromText(input.text);
+  }
 }
 
-export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): BrainGraph {
-  const tokens = normalizeTerms(terms);
+export function buildBrainGraphFromText(text: string, windowSize = 4): BrainGraph {
+  const terms = tokenize(text || "").map((name) => ({ name, kind: "Term" }));
+  return buildBrainGraphFromTerms(terms, windowSize);
+}
+
+export function buildBrainGraphFromTerms(concepts: TypedConcept[], windowSize = 4): BrainGraph {
+  const tokens = normalizeTerms(concepts);
   const frequencies = new Map<string, number>();
   const edgeWeights = new Map<string, number>();
+  const conceptKinds = new Map<string, string>();
 
-  for (const token of tokens) frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
+  for (const token of tokens) {
+    frequencies.set(token.name, (frequencies.get(token.name) ?? 0) + 1);
+    conceptKinds.set(token.name, token.kind);
+  }
 
-  for (let index = 0; index < tokens.length; index += 1) {
-    const current = tokens[index];
-    const upper = Math.min(tokens.length, index + windowSize);
+  const names = tokens.map((t) => t.name);
+  for (let index = 0; index < names.length; index += 1) {
+    const current = names[index];
+    const upper = Math.min(names.length, index + windowSize);
     for (let next = index + 1; next < upper; next += 1) {
-      const other = tokens[next];
+      const other = names[next];
       if (current === other) continue;
       const [source, target] = [current, other].sort();
       const key = `${source}\u0000${target}`;
@@ -120,7 +150,9 @@ export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): Brain
   }
 
   const graph = new Graph({ type: "undirected", multi: false, allowSelfLoops: false });
-  for (const [term, frequency] of frequencies) graph.addNode(term, { label: term, frequency });
+  for (const [term, frequency] of frequencies) {
+    graph.addNode(term, { label: term, frequency, kind: conceptKinds.get(term) ?? "Misc" });
+  }
 
   const edges: GraphEdge[] = [];
   for (const [key, weight] of edgeWeights) {
@@ -136,6 +168,7 @@ export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): Brain
   const nodes: GraphNode[] = graph.nodes().map((id) => ({
     id,
     label: id,
+    kind: graph.getNodeAttribute(id, "kind"),
     frequency: graph.getNodeAttribute(id, "frequency"),
     pagerank: pagerank.get(id) ?? 0,
     bridgeScore: bridgeScores.get(id) ?? 0,
@@ -144,9 +177,11 @@ export function buildBrainGraphFromTerms(terms: string[], windowSize = 4): Brain
 
   nodes.sort((a, b) => b.pagerank - a.pagerank);
   writeLayout(graph, nodes, edges);
+  // Default to community view after build
   applyGraphVisualEncoding(graph, nodes, edges, "community");
 
   const communityCount = new Set(nodes.map((node) => node.community)).size;
+  console.log(`Graph build complete: ${nodes.length} nodes, ${edges.length} edges, ${communityCount} communities.`);
   return {
     graph,
     nodes,
@@ -175,6 +210,7 @@ export function hydrateBrainGraph(stored: StoredBrainGraph): BrainGraph {
   for (const node of stored.nodes) {
     graph.addNode(node.id, {
       label: node.label,
+      kind: node.kind || "Term",
       frequency: node.frequency,
       pagerank: node.pagerank,
       bridgeScore: node.bridgeScore,
@@ -198,11 +234,13 @@ export function hydrateBrainGraph(stored: StoredBrainGraph): BrainGraph {
   };
 }
 
-function normalizeTerms(terms: string[]): string[] {
+function normalizeTerms(terms: TypedConcept[]): TypedConcept[] {
   return terms
-    .map((term) => term.trim().toLowerCase())
-    .map((term) => term.replace(/\s+/g, " "))
-    .filter((term) => term.length >= 2 && !STOP_WORDS.has(term))
+    .map((term) => ({
+      name: term.name.trim().toLowerCase().replace(/\s+/g, " "),
+      kind: term.kind
+    }))
+    .filter((term) => term.name.length >= 2 && !STOP_WORDS.has(term.name))
     .slice(0, 3000);
 }
 

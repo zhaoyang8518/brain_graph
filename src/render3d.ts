@@ -1,6 +1,5 @@
 import type { BrainGraph } from "./graph";
 import {
-  colorByFrequency,
   edgeColorByCommunity,
   edgeWidthByWeight,
   nodeColor,
@@ -11,6 +10,7 @@ import {
 type ForceGraph3DInstance = any;
 
 export type Graph3DRenderer = {
+  instance: ForceGraph3DInstance;
   refresh: () => void;
   destroy: () => void;
 };
@@ -47,11 +47,11 @@ export async function render3DGraph(
     .width(container.clientWidth)
     .height(container.clientHeight)
     .graphData(data)
-    .backgroundColor("#101214")
+    .backgroundColor("#09090b") // Match zinc-950
     .showNavInfo(false)
     .nodeLabel((node: any) => `${node.name}<br/>命中：${node.frequency}`)
     .nodeVal((node: any) => node.val)
-    .nodeColor((node: any) => (colorMode === "frequency" ? colorByFrequency(node.frequency) : node.color))
+    .nodeColor((node: any) => node.color)
     .linkColor((link: any) => link.color)
     .linkWidth((link: any) => edgeWidthByWeight(link.value))
     .linkOpacity(0.45)
@@ -77,6 +77,7 @@ export async function render3DGraph(
   resizeObserver.observe(container);
 
   return {
+    instance: renderer,
     refresh() {
       renderer.width(container.clientWidth);
       renderer.height(container.clientHeight);

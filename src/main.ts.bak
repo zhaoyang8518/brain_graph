@@ -29,7 +29,7 @@ import {
 import { loadLanguage, saveLanguage, translate, type Language, type MessageKey } from "./i18n";
 import { render3DGraph, type Graph3DRenderer } from "./render3d";
 import { applyGraphVisualEncoding, type NodeColorMode } from "./visualEncoding";
-import "./styles.css";
+import "./index.css";
 
 let renderer: Sigma | null = null;
 let renderer3d: Graph3DRenderer | null = null;
@@ -46,114 +46,176 @@ const t = (key: MessageKey) => translate(language, key);
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <main class="shell">
+    <!-- Sidebar -->
     <aside class="sidebar">
-      <div class="brand">
-        <span class="mark"></span>
+      <header class="sidebar-header">
         <div>
-          <h1>Brain Graph</h1>
-          <p data-i18n="appSubtitle">${t("appSubtitle")}</p>
-        </div>
-      </div>
-      <section class="project-section">
-        <div class="section-heading">
-          <h3 data-i18n="projects">${t("projects")}</h3>
-          <button id="newProjectButton" class="icon-button" type="button" title="New project">+</button>
-        </div>
-        <div id="projectList" class="project-list"></div>
-      </section>
-      <section class="stats" aria-label="Graph stats">
-        <div><strong id="termCount">0</strong><span>terms</span></div>
-        <div><strong id="linkCount">0</strong><span>links</span></div>
-        <div><strong id="communityCount">0</strong><span>topics</span></div>
-        <div><strong id="densityValue">0</strong><span>density</span></div>
-      </section>
-      <div class="sidebar-footer">
-        <button id="openSettingsButton" class="settings-link" type="button" data-i18n="settings">${t("settings")}</button>
-      </div>
-    </aside>
-    <section class="workspace">
-      <header class="toolbar">
-        <div>
-          <h2 data-i18n="conceptNetwork">${t("conceptNetwork")}</h2>
-          <p id="selectionSummary">${t("emptyStatus")}</p>
-        </div>
-        <div class="graph-controls" aria-label="Graph controls">
-          <button id="view2dButton" class="active" type="button">2D</button>
-          <button id="view3dButton" type="button">3D</button>
-          <span>颜色</span>
-          <button id="communityColorButton" class="active" type="button">主题</button>
-          <button id="frequencyColorButton" type="button">热度</button>
+          <h1 class="text-lg font-bold tracking-tight text-white">Brain Graph</h1>
+          <p class="text-[10px] uppercase tracking-widest text-zinc-500 font-medium" data-i18n="appSubtitle">${t("appSubtitle")}</p>
         </div>
       </header>
-      <div class="graph-panel"><div id="graphContainer"></div></div>
-      <div id="buildProgress" class="build-progress" hidden>
-        <div class="progress-bar"><span id="progressFill"></span></div>
-        <p id="progressText">Preparing build...</p>
+      
+      <div class="flex-1 overflow-y-auto px-4 py-6 space-y-8">
+        <section>
+          <div class="flex items-center justify-between mb-4 px-2">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500" data-i18n="projects">${t("projects")}</h2>
+            <button id="newProjectButton" class="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors">
+              <span>+</span>
+            </button>
+          </div>
+          <div id="projectList" class="space-y-1"></div>
+        </section>
       </div>
-      <section class="bottom-panel">
-        <div>
-          <h3 data-i18n="insights">${t("insights")}</h3>
-          <div id="insights" class="insights"></div>
+
+      <footer class="p-4 border-t border-zinc-800/50">
+        <button id="openSettingsButton" class="nav-item group">
+          <span class="text-lg group-hover:rotate-45 transition-transform duration-500">⚙</span>
+          <span class="text-sm font-medium" data-i18n="settings">${t("settings")}</span>
+        </button>
+      </footer>
+    </aside>
+
+    <!-- Workspace -->
+    <section class="workspace">
+      <header class="workspace-header">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-zinc-100 truncate" data-i18n="conceptNetwork">${t("conceptNetwork")}</h2>
+          <p id="selectionSummary" class="text-xs text-zinc-500 truncate mt-0.5">${t("emptyStatus")}</p>
         </div>
-        <div>
-          <h3 data-i18n="topTerms">${t("topTerms")}</h3>
-          <div id="topTerms" class="term-list"></div>
+        <div class="flex items-center gap-4">
+          <button id="themeToggleButton" class="p-2 rounded-lg text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-white transition-all active:scale-90" type="button" title="Toggle Theme">
+            <svg id="sunIcon" class="w-5 h-5 hidden dark:block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707m12.728 12.728L5.657 5.657M12 8a4 4 0 100 8 4 4 0 000-8z" />
+            </svg>
+            <svg id="moonIcon" class="w-5 h-5 block dark:hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 118.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          </button>
+          <div class="control-group">
+            <div class="flex gap-1 mr-2 px-2 border-r border-zinc-800">
+              <button id="communityColorButton" class="control-btn active" type="button" data-i18n="theme">主题</button>
+              <button id="frequencyColorButton" class="control-btn" type="button" data-i18n="heat">热度</button>
+              <button id="kindColorButton" class="control-btn" type="button" data-i18n="category">分类</button>
+            </div>
+            <div class="flex gap-1">
+              <button id="view2dButton" class="control-btn active" type="button">2D</button>
+              <button id="view3dButton" class="control-btn" type="button">3D</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="flex-1 relative overflow-hidden bg-[#08090a]">
+        <div id="graphContainer" class="absolute inset-0"></div>
+        
+        <!-- Build Progress overlay -->
+        <div id="buildProgress" class="progress-overlay" hidden>
+          <div class="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden mb-2">
+            <div id="progressFill" class="h-full bg-blue-500 transition-all duration-300 shadow-[0_0_12px_rgba(59,130,246,0.5)]"></div>
+          </div>
+          <p id="progressText" class="text-[10px] text-center uppercase tracking-tighter text-zinc-400 font-bold">Preparing build...</p>
+        </div>
+      </div>
+
+      <!-- Bottom Panel -->
+      <section class="bottom-section">
+        <div class="p-6 overflow-hidden flex flex-col">
+          <h3 class="panel-title" data-i18n="insights">${t("insights")}</h3>
+          <div id="insights" class="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-thin"></div>
+        </div>
+        <div class="p-6 overflow-hidden flex flex-col">
+          <h3 class="panel-title" data-i18n="topTerms">${t("topTerms")}</h3>
+          <div id="topTerms" class="flex-1 overflow-y-auto grid grid-cols-2 gap-2 pr-2 scrollbar-thin"></div>
         </div>
       </section>
     </section>
   </main>
-  <section id="settingsView" class="settings-view" hidden>
-    <aside class="settings-nav">
-      <button id="backToAppButton" class="back-button" type="button" data-i18n="returnToApp">${t("returnToApp")}</button>
-      <nav>
-        <button id="generalSettingsTab" class="settings-nav-item active" type="button" data-i18n="general">${t("general")}</button>
-        <button id="modelSettingsTab" class="settings-nav-item" type="button" data-i18n="models">${t("models")}</button>
-      </nav>
-    </aside>
-    <section class="settings-content">
-      <section id="generalSettingsPanel">
-        <header class="settings-header">
-          <h2 data-i18n="general">${t("general")}</h2>
-          <p data-i18n="generalDescription">${t("generalDescription")}</p>
-        </header>
-        <div class="settings-form">
-          <label class="field-label" for="languageSelect" data-i18n="language">${t("language")}</label>
-          <select id="languageSelect">
-            <option value="zh">中文</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-      </section>
-      <section id="modelSettingsPanel" hidden>
-        <header class="settings-header">
-          <h2 data-i18n="models">${t("models")}</h2>
-          <p data-i18n="modelsDescription">${t("modelsDescription")}</p>
-        </header>
-        <div class="settings-form">
-        <label class="toggle-row">
-          <input id="modelEnabled" type="checkbox" />
-          <span data-i18n="useModelExtraction">${t("useModelExtraction")}</span>
-        </label>
-        <label class="field-label" for="modelProvider" data-i18n="provider">${t("provider")}</label>
-        <select id="modelProvider">
-          <option value="ollama">Ollama</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="gemini">Gemini</option>
-          <option value="minimax">MiniMax</option>
-          <option value="custom">OpenAI-compatible</option>
-        </select>
-        <label class="field-label" for="modelName" data-i18n="model">${t("model")}</label>
-        <input id="modelName" type="text" />
-        <label class="field-label" for="modelBaseUrl" data-i18n="baseUrl">${t("baseUrl")}</label>
-        <input id="modelBaseUrl" type="text" />
-        <label class="field-label" for="modelApiKey" data-i18n="apiKey">${t("apiKey")}</label>
-        <input id="modelApiKey" type="password" autocomplete="off" />
-        <div class="settings-actions">
-          <button id="saveSettingsButton" type="button" data-i18n="save">${t("save")}</button>
-          <button id="resetSettingsButton" type="button" data-i18n="reset">${t("reset")}</button>
-        </div>
+
+  <!-- Settings View -->
+  <section id="settingsView" class="shell fixed inset-0 z-50" hidden>
+    <aside class="sidebar">
+      <div class="p-6">
+        <button id="backToAppButton" class="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors group mb-8" type="button">
+          <span class="group-hover:-translate-x-1 transition-transform">←</span>
+          <span class="text-sm font-medium" data-i18n="returnToApp">${t("returnToApp")}</span>
+        </button>
+        <nav class="space-y-1">
+          <button id="generalSettingsTab" class="nav-item active" type="button" data-i18n="general">${t("general")}</button>
+          <button id="modelSettingsTab" class="nav-item" type="button" data-i18n="models">${t("models")}</button>
+        </nav>
       </div>
-      </section>
+    </aside>
+    
+    <section class="flex-1 overflow-y-auto p-12 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+      <div class="max-w-2xl mx-auto">
+        <!-- General Panel -->
+        <section id="generalSettingsPanel" class="space-y-8">
+          <header>
+            <h2 class="text-2xl font-bold text-white mb-2" data-i18n="general">${t("general")}</h2>
+            <p class="text-zinc-500 text-sm" data-i18n="generalDescription">${t("generalDescription")}</p>
+          </header>
+          
+          <div class="settings-card">
+            <div class="space-y-2">
+              <label class="text-sm font-medium text-zinc-400 block" for="languageSelect" data-i18n="language">${t("language")}</label>
+              <select id="languageSelect" class="select-field">
+                <option value="zh">中文 (Chinese)</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- Model Panel -->
+        <section id="modelSettingsPanel" class="space-y-8" hidden>
+          <header>
+            <h2 class="text-2xl font-bold text-white mb-2" data-i18n="models">${t("models")}</h2>
+            <p class="text-zinc-500 text-sm" data-i18n="modelsDescription">${t("modelsDescription")}</p>
+          </header>
+          
+          <div class="settings-card">
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <div class="relative flex items-center">
+                <input id="modelEnabled" type="checkbox" class="sr-only peer" />
+                <div class="w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </div>
+              <span class="text-sm font-semibold text-zinc-200 group-hover:text-white transition-colors" data-i18n="useModelExtraction">${t("useModelExtraction")}</span>
+            </label>
+
+            <div class="grid grid-cols-2 gap-6">
+              <div class="space-y-2">
+                <label class="text-xs font-bold uppercase tracking-wider text-zinc-500" for="modelProvider" data-i18n="provider">${t("provider")}</label>
+                <select id="modelProvider" class="select-field">
+                  <option value="ollama">Ollama</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="minimax">MiniMax</option>
+                  <option value="custom">OpenAI-compatible</option>
+                </select>
+              </div>
+              <div class="space-y-2">
+                <label class="text-xs font-bold uppercase tracking-wider text-zinc-500" for="modelName" data-i18n="model">${t("model")}</label>
+                <input id="modelName" type="text" class="input-field" placeholder="e.g. qwen2.5:7b" />
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-xs font-bold uppercase tracking-wider text-zinc-500" for="modelBaseUrl" data-i18n="baseUrl">${t("baseUrl")}</label>
+              <input id="modelBaseUrl" type="text" class="input-field" />
+            </div>
+
+            <div class="space-y-2">
+              <label class="text-xs font-bold uppercase tracking-wider text-zinc-500" for="modelApiKey" data-i18n="apiKey">${t("apiKey")}</label>
+              <input id="modelApiKey" type="password" class="input-field" autocomplete="off" />
+            </div>
+
+            <div class="flex gap-3 pt-4">
+              <button id="saveSettingsButton" type="button" class="btn-primary flex-1" data-i18n="save">${t("save")}</button>
+              <button id="resetSettingsButton" type="button" class="btn-secondary px-6" data-i18n="reset">${t("reset")}</button>
+            </div>
+          </div>
+        </section>
+      </div>
     </section>
   </section>
 `;
@@ -182,8 +244,23 @@ const progressFill = document.querySelector<HTMLSpanElement>("#progressFill")!;
 const progressText = document.querySelector<HTMLParagraphElement>("#progressText")!;
 const communityColorButton = document.querySelector<HTMLButtonElement>("#communityColorButton")!;
 const frequencyColorButton = document.querySelector<HTMLButtonElement>("#frequencyColorButton")!;
+const kindColorButton = document.querySelector<HTMLButtonElement>("#kindColorButton")!;
 const view2dButton = document.querySelector<HTMLButtonElement>("#view2dButton")!;
 const view3dButton = document.querySelector<HTMLButtonElement>("#view3dButton")!;
+const selectionSummary = document.querySelector<HTMLParagraphElement>("#selectionSummary")!;
+const insightsList = document.querySelector<HTMLDivElement>("#insights")!;
+const topTermsList = document.querySelector<HTMLDivElement>("#topTerms")!;
+const themeToggleButton = document.querySelector<HTMLButtonElement>("#themeToggleButton")!;
+
+themeToggleButton.addEventListener("click", () => {
+  const isDark = document.documentElement.classList.toggle("dark");
+  localStorage.setItem("brain-graph:theme", isDark ? "dark" : "light");
+});
+
+// Initialize theme
+const savedTheme = localStorage.getItem("brain-graph:theme") || "dark";
+document.documentElement.classList.toggle("dark", savedTheme === "dark");
+
 newProjectButton.addEventListener("click", addProject);
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -226,6 +303,7 @@ modelProvider.addEventListener("change", () => {
 });
 communityColorButton.addEventListener("click", () => setNodeColorMode("community"));
 frequencyColorButton.addEventListener("click", () => setNodeColorMode("frequency"));
+kindColorButton.addEventListener("click", () => setNodeColorMode("kind"));
 view2dButton.addEventListener("click", () => setGraphViewMode("2d"));
 view3dButton.addEventListener("click", () => setGraphViewMode("3d"));
 
@@ -306,51 +384,58 @@ async function rebuildSelectedProjectList(project: ProjectInfo) {
 }
 
 function renderProjects() {
-  projectList.replaceChildren(
-    ...projects.map((project) => {
-      const row = document.createElement("div");
-      row.className = `project-row ${project.id === selectedProjectId ? "active" : ""}`;
+  const elements: HTMLElement[] = [];
+  projects.forEach((project) => {
+    const isSelected = project.id === selectedProjectId;
+    const row = document.createElement("div");
+    row.className = `group relative flex items-center justify-between rounded-lg transition-all mb-1 ${
+      isSelected ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/40 hover:text-zinc-900 dark:hover:text-zinc-200"
+    }`;
 
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "project-select";
-      button.innerHTML = `<span class="folder-icon">▰</span><span>${project.name}</span>`;
-      button.addEventListener("click", () => {
-        selectedProjectId = project.id;
-        renderProjects();
-        void loadGraphForProject(project);
-      });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "flex-1 flex items-center gap-3 px-3 py-2 text-sm font-medium text-left";
+    button.innerHTML = `<span class="text-xs opacity-50">▰</span><span>${project.name}</span>`;
+    button.addEventListener("click", () => {
+      selectedProjectId = project.id;
+      renderProjects();
+      void loadGraphForProject(project);
+    });
 
-      const menuButton = document.createElement("button");
-      menuButton.type = "button";
-      menuButton.className = "project-menu-button";
-      menuButton.textContent = "...";
-      menuButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        toggleProjectMenu(row, project);
-      });
+    const menuButton = document.createElement("button");
+    menuButton.type = "button";
+    menuButton.className = "project-menu-button px-2 py-2 opacity-0 group-hover:opacity-100 hover:text-zinc-900 dark:hover:text-white transition-opacity text-zinc-500";
+    menuButton.textContent = "•••";
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleProjectMenu(row, project);
+    });
 
-      row.append(button, menuButton);
-      if (project.id === selectedProjectId) {
-        row.append(renderProjectDocuments(project));
-      }
-      return row;
-    })
-  );
+    row.append(button, menuButton);
+    elements.push(row);
+
+    if (isSelected) {
+      elements.push(renderProjectDocuments(project));
+    }
+  });
+  projectList.replaceChildren(...elements);
 }
 
 function renderProjectDocuments(project: ProjectInfo) {
-  const list = document.createElement("div");
-  list.className = "project-document-list";
-  list.replaceChildren(
-    ...project.documents.slice(0, 80).map((doc) => {
-      const row = document.createElement("div");
-      row.className = "project-document-row";
-      row.innerHTML = `<span>${doc.name}</span><small>${doc.extension.toUpperCase()}</small>`;
-      return row;
+  const container = document.createElement("div");
+  container.className = "mt-1 mb-4 px-4 space-y-1 animate-in";
+  container.replaceChildren(
+    ...project.documents.slice(0, 50).map((doc) => {
+      const item = document.createElement("div");
+      item.className = "flex items-center justify-between px-3 py-1.5 rounded-md text-[11px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors group cursor-default";
+      item.innerHTML = `
+        <span class="truncate pr-2">${doc.name}</span>
+        <span class="text-[9px] font-bold opacity-0 group-hover:opacity-100 transition-opacity uppercase">${doc.extension}</span>
+      `;
+      return item;
     })
   );
-  return list;
+  return container;
 }
 
 async function renderGraph(graph: BrainGraph) {
@@ -391,6 +476,7 @@ function setNodeColorMode(mode: NodeColorMode) {
   nodeColorMode = mode;
   communityColorButton.classList.toggle("active", mode === "community");
   frequencyColorButton.classList.toggle("active", mode === "frequency");
+  kindColorButton.classList.toggle("active", mode === "kind");
   if (!currentGraph) return;
   applyGraphVisualEncoding(currentGraph.graph, currentGraph.nodes, currentGraph.edges, nodeColorMode);
   void renderGraph(currentGraph);
@@ -455,7 +541,12 @@ async function loadGraphForProject(project: ProjectInfo) {
       return;
     }
     currentGraph = hydrateBrainGraph(JSON.parse(graphJson) as StoredBrainGraph);
+    
+    // Explicitly refresh all UI components
     void renderGraph(currentGraph);
+    renderInsights(currentGraph);
+    renderTopTerms(currentGraph.nodes);
+    
     setStatus(`Loaded saved graph for ${project.name}.`);
   } catch (error) {
     setStatus(`Failed to load saved graph. ${String(error)}`);
@@ -521,54 +612,65 @@ function applyProviderDefaults(provider: ModelProvider) {
 }
 
 function setStatus(message: string) {
-  document.querySelector("#selectionSummary")!.textContent = message;
+  const el = document.querySelector("#selectionSummary");
+  if (el) el.textContent = message;
 }
 
 function selectNode(nodeId: string) {
   if (!currentGraph) return;
   const attrs = currentGraph.graph.getNodeAttributes(nodeId);
   const neighbors = currentGraph.graph.neighbors(nodeId).slice(0, 6).join(", ");
-  document.querySelector("#selectionSummary")!.textContent = `${attrs.label}: frequency ${attrs.frequency}, PageRank ${attrs.pagerank.toFixed(
-    3
-  )}, bridge ${attrs.bridgeScore.toFixed(2)}. Neighbors: ${neighbors || "none"}.`;
+  setStatus(`${attrs.label}: frequency ${attrs.frequency}, PageRank ${attrs.pagerank.toFixed(3)}, bridge ${attrs.bridgeScore.toFixed(2)}. Neighbors: ${neighbors || "none"}.`);
 }
 
 function renderStats(graph: BrainGraph) {
-  document.querySelector("#termCount")!.textContent = String(graph.stats.terms);
-  document.querySelector("#linkCount")!.textContent = String(graph.stats.links);
-  document.querySelector("#communityCount")!.textContent = String(graph.stats.communities);
-  document.querySelector("#densityValue")!.textContent = graph.stats.density.toFixed(3);
+  // Stats are currently hidden in new UI, but logic kept for future use
 }
 
 function renderInsights(graph: BrainGraph) {
-  const insights = document.querySelector<HTMLDivElement>("#insights")!;
-  insights.replaceChildren(
-    ...graph.insights.map((insight) => {
-      const item = document.createElement("article");
-      item.className = `insight ${insight.kind}`;
-      item.innerHTML = `<strong>${insight.title}</strong><p>${insight.detail}</p>`;
-      return item;
+  const container = document.querySelector<HTMLDivElement>("#insights");
+  if (!container) return;
+  
+  container.replaceChildren(
+    ...graph.insights.map((item) => {
+      const row = document.createElement("div");
+      row.className = `p-4 rounded-xl border transition-colors animate-in ${
+        item.kind === "bridge" 
+          ? "border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10 border-l-4 border-l-emerald-500" 
+          : item.kind === "gap" 
+            ? "border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10 border-l-4 border-l-amber-500" 
+            : "border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 border-l-4 border-l-blue-500"
+      }`;
+      row.innerHTML = `
+        <strong class="block text-xs font-bold text-zinc-900 dark:text-zinc-100 mb-1">${item.title}</strong>
+        <p class="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">${item.detail}</p>
+      `;
+      return row;
     })
   );
 }
 
 function renderTopTerms(nodes: GraphNode[]) {
-  const topTerms = document.querySelector<HTMLDivElement>("#topTerms")!;
-  topTerms.replaceChildren(
-    ...nodes.slice(0, 12).map((node) => {
+  const container = document.querySelector<HTMLDivElement>("#topTerms");
+  if (!container) return;
+
+  container.replaceChildren(
+    ...nodes.slice(0, 24).map((node) => {
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "term-row";
-      row.innerHTML = `<span>${node.label}</span><small>${node.frequency} mentions</small>`;
+      row.className = "flex items-center justify-between px-3 py-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all text-left group";
+      row.innerHTML = `
+        <span class="text-xs font-medium text-zinc-600 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white truncate mr-2">${node.label}</span>
+        <span class="text-[10px] font-bold text-zinc-400 dark:text-zinc-600 bg-zinc-200/50 dark:bg-zinc-900 px-1.5 py-0.5 rounded uppercase tracking-tighter">${node.frequency}</span>
+      `;
       row.addEventListener("click", () => {
-        renderer?.getCamera().animate(
-          {
+        if (renderer) {
+          renderer.getCamera().animate({
             x: currentGraph?.graph.getNodeAttribute(node.id, "x") ?? 0,
             y: currentGraph?.graph.getNodeAttribute(node.id, "y") ?? 0,
             ratio: 0.35
-          },
-          { duration: 350 }
-        );
+          }, { duration: 350 });
+        }
         selectNode(node.id);
       });
       return row;
