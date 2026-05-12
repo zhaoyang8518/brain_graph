@@ -55,6 +55,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "anshu_doc"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "rfd",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "text-splitter",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -353,21 +368,6 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
-]
-
-[[package]]
-name = "brain_graph"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "rfd",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "text-splitter",
 ]
 
 [[package]]

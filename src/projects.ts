@@ -50,12 +50,23 @@ export type SlideOutlineRequest = {
   slideCount: number;
   language: string;
   settings: any;
+  semanticEvidence?: Array<{
+    chunkId: string;
+    documentPath: string;
+    documentName: string;
+    chunkIndex: number;
+    text: string;
+    score: number;
+  }>;
 };
 
-const PROJECTS_KEY = "brain-graph:projects";
+const PROJECTS_KEY = "anshu-doc:projects";
+const LEGACY_PROJECTS_KEY = "brain-graph:projects";
+const PROJECT_GRAPH_KEY_PREFIX = "anshu-doc:project-graph:";
+const LEGACY_PROJECT_GRAPH_KEY_PREFIX = "brain-graph:project-graph:";
 
 export function loadProjects(): ProjectInfo[] {
-  const raw = localStorage.getItem(PROJECTS_KEY);
+  const raw = localStorage.getItem(PROJECTS_KEY) ?? localStorage.getItem(LEGACY_PROJECTS_KEY);
   if (!raw) return [];
   try {
     const projects = JSON.parse(raw);
@@ -94,19 +105,20 @@ export async function saveProjectGraph(projectPath: string, graphJson: string): 
   if (isTauriRuntime()) {
     return invoke<void>("save_project_graph", { projectPath, graphJson });
   }
-  localStorage.setItem(`brain-graph:project-graph:${projectPath}`, graphJson);
+  localStorage.setItem(`${PROJECT_GRAPH_KEY_PREFIX}${projectPath}`, graphJson);
 }
 
 export async function loadProjectGraph(projectPath: string): Promise<string | null> {
   if (isTauriRuntime()) {
     return invoke<string | null>("load_project_graph", { projectPath });
   }
-  return localStorage.getItem(`brain-graph:project-graph:${projectPath}`);
+  return localStorage.getItem(`${PROJECT_GRAPH_KEY_PREFIX}${projectPath}`)
+    ?? localStorage.getItem(`${LEGACY_PROJECT_GRAPH_KEY_PREFIX}${projectPath}`);
 }
 
-export async function generateSlideOutline(request: SlideOutlineRequest): Promise<any> {
+export async function generateSlideOutline(request: SlideOutlineRequest): Promise<string> {
   if (isTauriRuntime()) {
-    return invoke<any>("generate_slide_outline", { request });
+    return invoke<string>("generate_slide_outline", { request });
   }
   throw new Error("Slide outline generation is available in the Tauri desktop app.");
 }

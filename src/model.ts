@@ -27,7 +27,8 @@ export type ModelConnectionResult = {
   message: string;
 };
 
-const SETTINGS_KEY = "brain-graph:model-settings";
+const SETTINGS_KEY = "anshu-doc:model-settings";
+const LEGACY_SETTINGS_KEY = "brain-graph:model-settings";
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   enabled: false,
@@ -38,7 +39,7 @@ export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 };
 
 export function loadModelSettings(): ModelSettings {
-  const raw = localStorage.getItem(SETTINGS_KEY);
+  const raw = localStorage.getItem(SETTINGS_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_KEY);
   if (!raw) return DEFAULT_MODEL_SETTINGS;
   try {
     return { ...DEFAULT_MODEL_SETTINGS, ...JSON.parse(raw) };

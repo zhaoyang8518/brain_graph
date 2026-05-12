@@ -51,6 +51,16 @@ import {
   type ModelProvider
 } from "./model";
 import {
+  defaultEmbeddingSettingsForProvider,
+  embeddingProviderLabel,
+  loadEmbeddingSettings,
+  saveEmbeddingSettings,
+  searchProjectEmbeddings,
+  type SemanticSearchResult,
+  type EmbeddingProvider,
+  type EmbeddingSettings
+} from "./embedding";
+import {
   hydrateBrainGraph,
   serializeBrainGraph,
   buildBrainGraph,
@@ -79,13 +89,23 @@ type NodeContextMenuState = { nodeId: string; x: number; y: number } | null;
 type SummaryDrawerState = { title: string; subtitle: string; markdown: string };
 type SlideOutlineForm = { question: string; audience: string; slideCount: number; language: string };
 
+const PROJECT_SUMMARIES_KEY = "anshu-doc:project-summaries";
+const LEGACY_PROJECT_SUMMARIES_KEY = "brain-graph:project-summaries";
+const THEME_KEY = "anshu-doc:theme";
+const LEGACY_THEME_KEY = "brain-graph:theme";
+
 type ParsedDocument = {
   name: string;
   path: string;
   text: string;
 };
 
-function createProjectSummary(project: ProjectInfo, graph: BrainGraph, sourceText: string): string {
+function createProjectSummary(
+  project: ProjectInfo,
+  graph: BrainGraph,
+  sourceText: string,
+  semanticEvidence: SemanticSearchResult[] = []
+): string {
   const documents = parseProjectDocuments(sourceText);
   const keywords = graph.nodes
     .slice(0, 24)
@@ -125,9 +145,11 @@ function createProjectSummary(project: ProjectInfo, graph: BrainGraph, sourceTex
     overview.length ? overview.map((sentence) => `- ${sentence}`).join("\n") : "- 当前项目文档正文不足，暂时无法形成可靠的综合摘要。",
     "## 3. 主要主题",
     themeLines.length ? themeLines.join("\n") : "- 暂无明确主题。",
-    "## 4. 分文档要点",
+    semanticEvidence.length ? "## 4. 语义召回证据" : "",
+    semanticEvidence.length ? formatSemanticEvidence(semanticEvidence) : "",
+    "## 5. 分文档要点",
     documentSummaries || "暂无可摘要文档。",
-    "## 5. 阅读建议",
+    "## 6. 阅读建议",
     "- 先阅读综合摘要和主要主题，建立项目整体上下文。",
     "- 再按“分文档要点”定位具体文档，回到原文件查看细节。",
     "- 如果摘要偏泛，建议启用 Ollama 或云模型，让模型基于解析后的文档正文生成更高质量摘要。"
@@ -138,7 +160,8 @@ function createNodeSummary(
   graph: BrainGraph,
   nodeId: string,
   sourceText: string,
-  mode: "node" | "related"
+  mode: "node" | "related",
+  semanticEvidence: SemanticSearchResult[] = []
 ): SummaryDrawerState {
   const attrs = graph.graph.getNodeAttributes(nodeId);
   const label = String(attrs.label || nodeId);
@@ -161,7 +184,9 @@ function createNodeSummary(
     sentences.length
       ? sentences.map((sentence) => `- ${sentence}`).join("\n")
       : "- 当前项目文档中没有提取到足够的相关句子。建议重新构建图谱或扩大文档内容。",
-    mode === "related" ? "## 4. 使用建议" : "## 3. 使用建议",
+    semanticEvidence.length ? (mode === "related" ? "## 4. 语义召回证据" : "## 3. 语义召回证据") : "",
+    semanticEvidence.length ? formatSemanticEvidence(semanticEvidence) : "",
+    mode === "related" ? "## 5. 使用建议" : "## 4. 使用建议",
     mode === "related"
       ? "- 可从关联节点切入，查看这些概念在同一主题簇中的共同上下文。"
       : "- 可查看“关联性摘要”，理解该概念和相邻概念之间的上下文关系。"
@@ -172,6 +197,18 @@ function createNodeSummary(
     subtitle: mode === "related" ? "节点关联性摘要" : "节点摘要",
     markdown
   };
+}
+
+function formatSemanticEvidence(results: SemanticSearchResult[]): string {
+  return results.slice(0, 8).map((result, index) => {
+    const excerpt = cleanDocumentText(result.text).slice(0, 320);
+    return [
+      `### ${index + 1}. ${result.documentName}`,
+      `- 相似度：${result.score.toFixed(3)}`,
+      `- Chunk：${result.chunkIndex + 1}`,
+      `- 摘录：${excerpt}${result.text.length > 320 ? "..." : ""}`
+    ].join("\n");
+  }).join("\n\n");
 }
 
 function slideOutlineToMarkdown(outline: any): string {
@@ -330,6 +367,7 @@ export default function App() {
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [colorMode, setColorMode] = useState<NodeColorMode>("community");
   const [modelSettings, setModelSettings] = useState<ModelSettings>(loadModelSettings());
+  const [embeddingSettings, setEmbeddingSettings] = useState<EmbeddingSettings>(loadEmbeddingSettings());
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelTestState, setModelTestState] = useState<{ loading: boolean; message: string; ok?: boolean }>({ loading: false, message: "" });
   const [status, setStatus] = useState<string>("");
@@ -354,7 +392,7 @@ export default function App() {
   const [slideOutlineJson, setSlideOutlineJson] = useState<any>(null);
   const [isGeneratingSlideOutline, setIsGeneratingSlideOutline] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, string>>(() => {
-    const raw = localStorage.getItem("brain-graph:project-summaries");
+    const raw = localStorage.getItem(PROJECT_SUMMARIES_KEY) ?? localStorage.getItem(LEGACY_PROJECT_SUMMARIES_KEY);
     if (!raw) return {};
     try {
       const parsed = JSON.parse(raw);
@@ -376,7 +414,7 @@ export default function App() {
 
   // Theme initialization
   useEffect(() => {
-    const saved = localStorage.getItem("brain-graph:theme") || "dark";
+    const saved = localStorage.getItem(THEME_KEY) ?? localStorage.getItem(LEGACY_THEME_KEY) ?? "dark";
     const dark = saved === "dark";
     setIsDark(dark);
     document.documentElement.classList.toggle("dark", dark);
@@ -386,7 +424,7 @@ export default function App() {
     const next = !isDark;
     setIsDark(next);
     document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("brain-graph:theme", next ? "dark" : "light");
+    localStorage.setItem(THEME_KEY, next ? "dark" : "light");
   };
 
   // Load graph when project changes
@@ -487,7 +525,7 @@ export default function App() {
       setBuildProgress({ percent: 0, message: t("readingDocuments") });
       // This part would ideally be async with progress reporting from Tauri
       // For now, keeping it consistent with legacy imperative logic
-      const graph = await buildBrainGraph(project, modelSettings, updateBuildProgress, false);
+      const graph = await buildBrainGraph(project, modelSettings, embeddingSettings, updateBuildProgress, false);
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
@@ -509,7 +547,7 @@ export default function App() {
 
     try {
       setBuildProgress({ percent: 0, message: rebuild ? "Clearing graph cache..." : t("readingDocuments") });
-      const graph = await buildBrainGraph(project, modelSettings, updateBuildProgress, rebuild);
+      const graph = await buildBrainGraph(project, modelSettings, embeddingSettings, updateBuildProgress, rebuild);
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
@@ -540,7 +578,7 @@ export default function App() {
 
   const saveSummaries = (nextSummaries: Record<string, string>) => {
     setSummaries(nextSummaries);
-    localStorage.setItem("brain-graph:project-summaries", JSON.stringify(nextSummaries));
+    localStorage.setItem(PROJECT_SUMMARIES_KEY, JSON.stringify(nextSummaries));
   };
 
   const showProjectContent = async (project: ProjectInfo, mode: ProjectContentMode) => {
@@ -568,8 +606,14 @@ export default function App() {
       if (!graph) return;
 
       const input = await buildProjectGraphInput(project.path);
+      const semanticEvidence = await searchProjectEmbeddings(
+        project.path,
+        graph.nodes.slice(0, 12).map((node) => node.label).join(" "),
+        embeddingSettings,
+        8
+      );
       setCurrentGraph(graph);
-      const markdown = createProjectSummary(project, graph, input.text);
+      const markdown = createProjectSummary(project, graph, input.text, semanticEvidence);
       saveSummaries({ ...summaries, [project.id]: markdown });
       setSummaryDrawer({ title: project.name, subtitle: "项目文档综合摘要", markdown });
     } catch (error) {
@@ -591,7 +635,18 @@ export default function App() {
     });
     try {
       const input = await buildProjectGraphInput(project.path);
-      setSummaryDrawer(createNodeSummary(currentGraph, nodeId, input.text, mode));
+      const attrs = currentGraph.graph.getNodeAttributes(nodeId);
+      const label = String(attrs.label || nodeId);
+      const relatedLabels = mode === "related"
+        ? currentGraph.graph.neighbors(nodeId).slice(0, 12).map((neighbor) => String(currentGraph.graph.getNodeAttribute(neighbor, "label") || neighbor))
+        : [];
+      const semanticEvidence = await searchProjectEmbeddings(
+        project.path,
+        [label, ...relatedLabels].join(" "),
+        embeddingSettings,
+        mode === "related" ? 10 : 6
+      );
+      setSummaryDrawer(createNodeSummary(currentGraph, nodeId, input.text, mode, semanticEvidence));
     } catch (error) {
       setSummaryDrawer({
         title: "摘要生成失败",
@@ -651,6 +706,7 @@ export default function App() {
 
   const handleSaveSettings = () => {
     saveModelSettings(modelSettings);
+    saveEmbeddingSettings(embeddingSettings);
     saveLanguage(language);
     setIsSettingsOpen(false);
     setStatus(t("settingsSaved") as string);
@@ -735,13 +791,14 @@ export default function App() {
   const totalDocuments = projects.reduce((sum, project) => sum + project.documents.length, 0);
   const selectedDocumentCount = selectedProject?.documents.length ?? 0;
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground font-sans">
+    <div data-app="anshu-doc" data-view="workspace" className="flex h-screen w-full overflow-hidden bg-background text-foreground font-sans">
       {/* Sidebar */}
       <aside
+        data-panel="project-sidebar"
         className="relative shrink-0 border-r bg-muted/30 backdrop-blur-xl flex flex-col"
         style={{ width: sidebarWidth }}
       >
-        <div className="h-16 flex items-center px-6 border-b">
+        <div data-section="app-brand" className="h-16 flex items-center px-6 border-b">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-background border border-border rounded-xl flex items-center justify-center overflow-hidden shadow-sm shrink-0">
               <img src={logoImage} alt="Logo" className="w-full h-full object-cover" />
@@ -753,18 +810,20 @@ export default function App() {
           </div>
         </div>
 
-        <ScrollArea className="flex-1 p-4">
+        <ScrollArea data-section="project-list" className="flex-1 p-4">
           <div className="flex items-center justify-between mb-4 px-2">
             <h2 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("projects")}</h2>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleAddProject}>
+            <Button data-action="add-project" variant="ghost" size="icon" className="h-6 w-6" onClick={handleAddProject}>
               <Plus size={14} />
             </Button>
           </div>
 
           <div className="space-y-1">
             {projects.map(project => (
-              <div key={project.id} className="group relative flex flex-col">
+              <div key={project.id} data-project-id={project.id} data-project-name={project.name} className="group relative flex flex-col">
                 <div
+                  data-component="project-row"
+                  data-state={selectedProjectId === project.id ? "selected" : "idle"}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-3 py-2 transition-all",
                     selectedProjectId === project.id
@@ -773,6 +832,7 @@ export default function App() {
                   )}
                 >
                   <button
+                    data-action="select-project"
                     onClick={() => {
                       setSelectedProjectId(project.id);
                       setIsSummaryDrawerOpen(false);
@@ -783,6 +843,7 @@ export default function App() {
                     <span className="truncate">{project.name}</span>
                   </button>
                   <button
+                    data-action="open-project-menu"
                     type="button"
                     aria-label={`${project.name} menu`}
                     className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-70 transition hover:bg-background/70 hover:opacity-100"
@@ -796,33 +857,33 @@ export default function App() {
                 </div>
 
                 {projectMenuId === project.id && (
-                  <div className="absolute right-2 top-9 z-40 w-40 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl">
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, false)}>
+                  <div data-menu="project-actions" className="absolute right-2 top-9 z-40 w-40 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl">
+                    <button data-action="incremental-build-graph" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, false)}>
                       增量构建图谱
                     </button>
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, true)}>
+                    <button data-action="rebuild-graph" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, true)}>
                       重新构建图谱
                     </button>
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleRefreshProject(project)}>
+                    <button data-action="refresh-project" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleRefreshProject(project)}>
                       刷新
                     </button>
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => openSlideOutlineComposer(project)}>
+                    <button data-action="open-slide-outline-composer" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => openSlideOutlineComposer(project)}>
                       生成幻灯片大纲
                     </button>
                     <div className="my-1 h-px bg-border" />
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void showProjectContent(project, "graph")}>
+                    <button data-action="show-project-graph" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void showProjectContent(project, "graph")}>
                       显示图谱
                     </button>
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void showProjectContent(project, "summary")}>
+                    <button data-action="show-project-summary" className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void showProjectContent(project, "summary")}>
                       显示摘要
                     </button>
                   </div>
                 )}
 
                 {selectedProjectId === project.id && (
-                  <div className="mt-1 ml-4 pl-4 border-l space-y-1 animate-in fade-in slide-in-from-left-2 duration-300">
+                  <div data-section="project-documents" className="mt-1 ml-4 pl-4 border-l space-y-1 animate-in fade-in slide-in-from-left-2 duration-300">
                     {project.documents.slice(0, 10).map(doc => (
-                      <div key={doc.name} className="flex items-center justify-between text-[11px] text-muted-foreground py-1 px-2 rounded hover:bg-accent/30 transition-colors">
+                      <div key={doc.name} data-document-name={doc.name} data-document-extension={doc.extension} className="flex items-center justify-between text-[11px] text-muted-foreground py-1 px-2 rounded hover:bg-accent/30 transition-colors">
                         <span className="truncate">{doc.name}</span>
                         <span className="text-[9px] font-bold opacity-50 uppercase">{doc.extension}</span>
                       </div>
@@ -842,6 +903,7 @@ export default function App() {
 
         <div className="p-4 border-t bg-muted/20">
           <Button
+            data-action="open-settings"
             variant="ghost"
             className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
             onClick={() => setIsSettingsOpen(true)}
@@ -862,20 +924,22 @@ export default function App() {
       {/* Main Content */}
       <main className="relative flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-8 border-b bg-background/80 backdrop-blur-md sticky top-0 z-10">
+        <header data-panel="workspace-header" className="h-16 flex items-center justify-between px-8 border-b bg-background/80 backdrop-blur-md sticky top-0 z-10">
           <div className="flex flex-col">
             <h1 className="text-sm font-semibold">{selectedProject?.name || "No Project Selected"}</h1>
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{status || t("ready")}</p>
           </div>
 
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={toggleTheme}>
+            <Button data-action="toggle-theme" variant="ghost" size="icon" onClick={toggleTheme}>
               {isDark ? <Sun size={18} /> : <Moon size={18} />}
             </Button>
 
             <Separator orientation="vertical" className="h-8" />
             <div className="flex items-center gap-1 bg-muted p-1 rounded-lg shadow-inner">
               <Button
+                data-action="set-graph-view"
+                data-graph-mode="2d"
                 variant="ghost"
                 size="sm"
                 className={cn(
@@ -888,6 +952,8 @@ export default function App() {
                 2D
               </Button>
               <Button
+                data-action="set-graph-view"
+                data-graph-mode="3d"
                 variant="ghost"
                 size="sm"
                 className={cn(
@@ -903,6 +969,8 @@ export default function App() {
 
             <div className="flex items-center gap-1 bg-muted p-1 rounded-lg shadow-inner">
               <Button
+                data-action="set-color-mode"
+                data-color-mode="community"
                 variant="ghost"
                 size="sm"
                 className={cn(
@@ -914,6 +982,8 @@ export default function App() {
                 {t("colorCommunity")}
               </Button>
               <Button
+                data-action="set-color-mode"
+                data-color-mode="kind"
                 variant="ghost"
                 size="sm"
                 className={cn(
@@ -925,6 +995,8 @@ export default function App() {
                 {t("colorKind")}
               </Button>
               <Button
+                data-action="set-color-mode"
+                data-color-mode="frequency"
                 variant="ghost"
                 size="sm"
                 className={cn(
@@ -940,22 +1012,25 @@ export default function App() {
         </header>
 
         {/* Graph Workspace */}
-        <div className="flex-1 relative overflow-hidden bg-zinc-50 dark:bg-zinc-950" onClick={() => setNodeContextMenu(null)}>
-          <div ref={containerRef} className="absolute inset-0" />
+        <div data-panel="graph-workspace" data-graph-mode={viewMode} className="flex-1 relative overflow-hidden bg-zinc-50 dark:bg-zinc-950" onClick={() => setNodeContextMenu(null)}>
+          <div ref={containerRef} data-canvas-host="graph" className="absolute inset-0" />
 
           {nodeContextMenu && (
             <div
+              data-menu="node-actions"
               className="fixed z-50 w-40 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl"
               style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
               onClick={(event) => event.stopPropagation()}
             >
               <button
+                data-action="show-node-summary"
                 className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted"
                 onClick={() => void showNodeSummary(nodeContextMenu.nodeId, "node")}
               >
                 显示摘要
               </button>
               <button
+                data-action="show-related-summary"
                 className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted"
                 onClick={() => void showNodeSummary(nodeContextMenu.nodeId, "related")}
               >
@@ -965,7 +1040,7 @@ export default function App() {
           )}
 
           {!currentGraph && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground p-12 text-center">
+            <div data-state="empty-graph" className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground p-12 text-center">
               {isInitialLoading ? (
                 <>
                   <RefreshCw size={24} className="mb-4 opacity-20 animate-spin" />
@@ -976,7 +1051,7 @@ export default function App() {
                   <Database size={48} className="mb-4 opacity-20" />
                   <h3 className="text-lg font-medium">{t("noSavedGraph")}</h3>
                   <p className="text-sm max-w-xs">{t("emptyStatus")}</p>
-                  <Button variant="outline" className="mt-6" onClick={handleBuildGraph}>
+                  <Button data-action="build-selected-project-graph" variant="outline" className="mt-6" onClick={handleBuildGraph}>
                     {t("buildGraph")}
                   </Button>
                 </>
@@ -985,7 +1060,7 @@ export default function App() {
           )}
 
           {buildProgress && (
-            <Card className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[min(520px,calc(100%-48px))] shadow-2xl border-primary/20 bg-background/90 backdrop-blur-xl animate-in zoom-in-95">
+            <Card data-panel="build-progress" className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[min(520px,calc(100%-48px))] shadow-2xl border-primary/20 bg-background/90 backdrop-blur-xl animate-in zoom-in-95">
               <CardContent className="p-4 pt-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="min-w-0 pr-4 text-[10px] font-bold uppercase tracking-widest">{buildProgress.message}</span>
@@ -1022,10 +1097,11 @@ export default function App() {
 
         {/* Bottom Section */}
         <section
+          data-panel="bottom-insights"
           className="shrink-0 grid grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)] divide-x bg-muted/10"
           style={{ height: bottomPanelHeight }}
         >
-          <div className="flex flex-col p-3 overflow-hidden">
+          <div data-section="graph-stats" className="flex flex-col p-3 overflow-hidden">
             <div className="flex items-center gap-2 mb-4">
               <Database size={14} className="text-emerald-500" />
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">统计</h3>
@@ -1047,7 +1123,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex flex-col p-3 overflow-hidden">
+          <div data-section="graph-insights" className="flex flex-col p-3 overflow-hidden">
             <div className="flex items-center gap-2 mb-4">
               <Lightbulb size={14} className="text-amber-500" />
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("insights")}</h3>
@@ -1072,7 +1148,7 @@ export default function App() {
             </ScrollArea>
           </div>
 
-          <div className="flex flex-col p-3 overflow-hidden">
+          <div data-section="top-terms" className="flex flex-col p-3 overflow-hidden">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 size={14} className="text-blue-500" />
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("topTerms")}</h3>
@@ -1081,6 +1157,8 @@ export default function App() {
               <div className="grid grid-cols-3 gap-2 p-1 pr-4">
                 {currentGraph?.nodes.slice(0, 20).map((node, i) => (
                   <button
+                    data-action="select-top-term"
+                    data-node-id={node.id}
                     key={node.id}
                     className={cn(
                       "relative flex items-center justify-between px-2 py-2.5 rounded-xl transition-all text-left group border-0 shadow-md hover:brightness-110 active:scale-[0.98] overflow-hidden",
@@ -1139,6 +1217,8 @@ export default function App() {
 
         {selectedProject && (
           <div
+            data-panel="summary-drawer"
+            data-state={isSummaryDrawerOpen ? "open" : "closed"}
             className={cn(
               "absolute bottom-0 right-0 top-16 z-30 flex max-w-[calc(100%-32px)] flex-col border-l bg-background shadow-2xl transition-transform duration-300 ease-out",
               isSummaryDrawerOpen ? "translate-x-0" : "translate-x-full"
@@ -1153,12 +1233,12 @@ export default function App() {
               className="absolute left-[-4px] top-0 z-40 h-full w-2 cursor-col-resize bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/40"
               onPointerDown={startSummaryDrawerResize}
             />
-            <div className="flex h-16 shrink-0 items-center justify-between border-b px-6">
+            <div data-section="summary-drawer-header" className="flex h-16 shrink-0 items-center justify-between border-b px-6">
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold">{summaryDrawer?.title || selectedProject.name}</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">{summaryDrawer?.subtitle || "项目文档综合摘要"}</p>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => {
+              <Button data-action="close-summary-drawer" variant="ghost" size="icon" onClick={() => {
                 setIsSummaryDrawerOpen(false);
                 setSummaryDrawer(null);
                 setIsSlideOutlineComposerOpen(false);
@@ -1169,10 +1249,11 @@ export default function App() {
             <ScrollArea className="flex-1">
               <div className="space-y-6 p-6">
                 {isSlideOutlineComposerOpen && (
-                  <div className="space-y-4 rounded-xl border bg-muted/20 p-4">
+                  <div data-section="slide-outline-composer" className="space-y-4 rounded-xl border bg-muted/20 p-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">主题 / 问题</label>
                       <textarea
+                        data-field="slide-outline-question"
                         value={slideOutlineForm.question}
                         onChange={(event) => setSlideOutlineForm({ ...slideOutlineForm, question: event.target.value })}
                         placeholder="例如：围绕这个项目生成一份面向管理层的风险与机会分析汇报"
@@ -1183,6 +1264,7 @@ export default function App() {
                       <div className="space-y-2">
                         <label className="text-sm font-medium">受众</label>
                         <input
+                          data-field="slide-outline-audience"
                           value={slideOutlineForm.audience}
                           onChange={(event) => setSlideOutlineForm({ ...slideOutlineForm, audience: event.target.value })}
                           className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -1191,6 +1273,7 @@ export default function App() {
                       <div className="space-y-2">
                         <label className="text-sm font-medium">页数</label>
                         <input
+                          data-field="slide-outline-count"
                           type="number"
                           min={3}
                           max={20}
@@ -1202,7 +1285,7 @@ export default function App() {
                       <div className="space-y-2">
                         <label className="text-sm font-medium">语言</label>
                         <Select value={slideOutlineForm.language} onValueChange={(value) => setSlideOutlineForm({ ...slideOutlineForm, language: value })}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectTrigger data-field="slide-outline-language"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="zh">中文</SelectItem>
                             <SelectItem value="en">English</SelectItem>
@@ -1210,7 +1293,7 @@ export default function App() {
                         </Select>
                       </div>
                     </div>
-                    <Button onClick={handleGenerateSlideOutline} disabled={isGeneratingSlideOutline || !slideOutlineForm.question.trim()}>
+                    <Button data-action="generate-slide-outline" onClick={handleGenerateSlideOutline} disabled={isGeneratingSlideOutline || !slideOutlineForm.question.trim()}>
                       {isGeneratingSlideOutline ? "生成中..." : "生成大纲"}
                     </Button>
                   </div>
@@ -1224,22 +1307,23 @@ export default function App() {
 
       {/* Settings Dialog */}
       <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent data-view="settings" className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">{t("settings")}</DialogTitle>
           </DialogHeader>
 
           <Tabs defaultValue="general" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-8">
-              <TabsTrigger value="general">{t("general")}</TabsTrigger>
-              <TabsTrigger value="model">{t("models")}</TabsTrigger>
+            <TabsList data-section="settings-tabs" className="grid w-full grid-cols-3 mb-8">
+              <TabsTrigger data-tab="general" value="general">{t("general")}</TabsTrigger>
+              <TabsTrigger data-tab="models" value="model">{t("models")}</TabsTrigger>
+              <TabsTrigger data-tab="advanced" value="advanced">{t("advanced")}</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="general" className="space-y-6">
+            <TabsContent data-section="settings-general" value="general" className="space-y-6">
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t("language")}</label>
                 <Select value={language} onValueChange={(val: Language) => setLanguage(val)}>
-                  <SelectTrigger>
+                  <SelectTrigger data-field="language">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1250,13 +1334,14 @@ export default function App() {
               </div>
             </TabsContent>
 
-            <TabsContent value="model" className="space-y-6">
-              <div className="flex items-center justify-between p-4 rounded-xl border bg-muted/20">
+            <TabsContent data-section="settings-models" value="model" className="space-y-6">
+              <div data-setting="model-extraction" className="flex items-center justify-between p-4 rounded-xl border bg-muted/20">
                 <div className="space-y-0.5">
                   <div className="text-sm font-medium">{t("enableModel")}</div>
                   <div className="text-xs text-muted-foreground">Use LLM to improve entity extraction</div>
                 </div>
                 <input
+                  data-field="model-enabled"
                   type="checkbox"
                   checked={modelSettings.enabled}
                   onChange={(e) => setModelSettings({ ...modelSettings, enabled: e.target.checked })}
@@ -1272,7 +1357,7 @@ export default function App() {
                     setAvailableModels([]);
                     setModelTestState({ loading: false, message: "" });
                   }}>
-                    <SelectTrigger>
+                    <SelectTrigger data-field="model-provider">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1287,6 +1372,7 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Base URL</label>
                   <input
+                    data-field="model-base-url"
                     type="text"
                     value={modelSettings.baseUrl}
                     onChange={(e) => {
@@ -1301,6 +1387,7 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">API Key</label>
                   <input
+                    data-field="model-api-key"
                     type="password"
                     value={modelSettings.apiKey}
                     onChange={(e) => {
@@ -1314,6 +1401,7 @@ export default function App() {
 
                 <div className="flex items-center gap-3">
                   <Button
+                    data-action="test-model-connection"
                     type="button"
                     variant="outline"
                     onClick={handleTestModelConnection}
@@ -1334,7 +1422,7 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">{t("modelName")}</label>
                   <Select value={modelSettings.model} onValueChange={(value) => setModelSettings({ ...modelSettings, model: value })}>
-                    <SelectTrigger>
+                    <SelectTrigger data-field="model-name-select">
                       <SelectValue placeholder="Select a model" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1348,6 +1436,7 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Custom Model Name</label>
                   <input
+                    data-field="custom-model-name"
                     type="text"
                     value={modelSettings.model}
                     onChange={(e) => setModelSettings({ ...modelSettings, model: e.target.value })}
@@ -1357,11 +1446,121 @@ export default function App() {
                 </div>
               </div>
             </TabsContent>
+
+            <TabsContent data-section="settings-advanced" value="advanced" className="space-y-6">
+              <div data-section="embedding-settings-header" className="space-y-1">
+                <div className="text-sm font-semibold">{t("embedding")}</div>
+                <div className="text-xs text-muted-foreground">{t("embeddingDescription")}</div>
+              </div>
+
+              <div data-setting="embedding" className="flex items-center justify-between p-4 rounded-xl border bg-muted/20">
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium">{t("enableEmbedding")}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {embeddingSettings.enabled ? embeddingProviderLabel(embeddingSettings.provider) : "Graph and keyword retrieval only"}
+                  </div>
+                </div>
+                <input
+                  data-field="embedding-enabled"
+                  type="checkbox"
+                  checked={embeddingSettings.enabled}
+                  onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, enabled: e.target.checked })}
+                  className="w-4 h-4"
+                />
+              </div>
+
+              {embeddingSettings.enabled && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t("embeddingProvider")}</label>
+                  <Select value={embeddingSettings.provider} onValueChange={(value: EmbeddingProvider) => {
+                    setEmbeddingSettings({
+                      ...embeddingSettings,
+                      provider: value,
+                      ...defaultEmbeddingSettingsForProvider(value)
+                    });
+                  }}>
+                    <SelectTrigger data-field="embedding-provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ollama">Ollama</SelectItem>
+                      <SelectItem value="dashscope">Alibaba DashScope</SelectItem>
+                      <SelectItem value="zhipu">Zhipu AI</SelectItem>
+                      <SelectItem value="baidu">Baidu Qianfan</SelectItem>
+                      <SelectItem value="minimax">MiniMax</SelectItem>
+                      <SelectItem value="custom">OpenAI-compatible</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Base URL</label>
+                  <input
+                    data-field="embedding-base-url"
+                    type="text"
+                    value={embeddingSettings.baseUrl}
+                    onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, baseUrl: e.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </div>
+
+                {embeddingSettings.provider !== "ollama" && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">API Key</label>
+                    <input
+                      data-field="embedding-api-key"
+                      type="password"
+                      value={embeddingSettings.apiKey}
+                      onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, apiKey: e.target.value })}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                )}
+
+                {embeddingSettings.provider === "minimax" && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{t("groupId")}</label>
+                    <input
+                      data-field="embedding-group-id"
+                      type="text"
+                      value={embeddingSettings.groupId}
+                      onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, groupId: e.target.value })}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t("embeddingModel")}</label>
+                  <input
+                    data-field="embedding-model"
+                    type="text"
+                    value={embeddingSettings.model}
+                    onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, model: e.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t("dimensions")}</label>
+                  <input
+                    data-field="embedding-dimensions"
+                    type="number"
+                    min={1}
+                    value={embeddingSettings.dimensions}
+                    onChange={(e) => setEmbeddingSettings({ ...embeddingSettings, dimensions: Number(e.target.value) || 0 })}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                </div>
+              </div>
+              )}
+            </TabsContent>
           </Tabs>
 
           <div className="flex justify-end gap-3 mt-6">
-            <Button variant="ghost" onClick={() => setIsSettingsOpen(false)}>{t("cancel")}</Button>
-            <Button onClick={handleSaveSettings}>{t("save")}</Button>
+            <Button data-action="cancel-settings" variant="ghost" onClick={() => setIsSettingsOpen(false)}>{t("cancel")}</Button>
+            <Button data-action="save-settings" onClick={handleSaveSettings}>{t("save")}</Button>
           </div>
         </DialogContent>
       </Dialog>

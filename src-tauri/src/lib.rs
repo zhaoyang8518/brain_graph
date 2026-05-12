@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use tauri::Manager;
 use text_splitter::MarkdownSplitter;
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +144,43 @@ struct StoredGraph {
     edges: Vec<StoredGraphEdge>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChunkEmbeddingInput {
+    project_path: String,
+    chunk_id: String,
+    document_path: String,
+    document_name: String,
+    chunk_index: usize,
+    text: String,
+    text_hash: String,
+    provider: String,
+    model: String,
+    dimensions: usize,
+    embedding: Vec<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticSearchRequest {
+    project_path: String,
+    provider: String,
+    model: String,
+    embedding: Vec<f64>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticSearchResult {
+    chunk_id: String,
+    document_path: String,
+    document_name: String,
+    chunk_index: usize,
+    text: String,
+    score: f64,
+}
+
 #[tauri::command]
 async fn extract_concepts(
     text: String,
@@ -190,10 +228,12 @@ async fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectio
 }
 
 #[tauri::command]
-async fn generate_slide_outline(request: SlideOutlineRequest) -> Result<Value, String> {
-    let graph_json = load_project_graph(request.project_path.clone())
-        .await?
-        .ok_or_else(|| {
+async fn generate_slide_outline(
+    app: tauri::AppHandle,
+    request: SlideOutlineRequest,
+) -> Result<String, String> {
+    let graph_json =
+        load_project_graph_from_db(&app, request.project_path.clone())?.ok_or_else(|| {
             "No saved graph found for this project. Build the graph first.".to_string()
         })?;
     let graph: StoredGraph = serde_json::from_str(&graph_json)
@@ -201,28 +241,16 @@ async fn generate_slide_outline(request: SlideOutlineRequest) -> Result<Value, S
     let input = build_project_graph_input(request.project_path.clone(), Some(false)).await?;
     let context = make_slide_outline_context(&graph, &input, &request);
     let prompt = make_slide_outline_prompt(&context, &request);
-    match complete_json_with_model(&prompt, &request.settings).await {
-        Ok(outline) => {
-            if let Some(normalized) = normalize_slide_outline(outline.clone(), &request) {
-                return Ok(normalized);
-            }
-            let repair_prompt = make_slide_outline_repair_prompt(&outline, &context, &request);
-            match complete_json_with_model(&repair_prompt, &request.settings).await {
-                Ok(repaired) => {
-                    if let Some(normalized) = normalize_slide_outline(repaired, &request) {
-                        Ok(normalized)
-                    } else {
-                        Ok(make_fallback_slide_outline(
-                            &context,
-                            &request,
-                            "Model returned JSON twice, but neither response matched the slide outline schema.",
-                        ))
-                    }
-                }
-                Err(error) => Ok(make_fallback_slide_outline(&context, &request, &error)),
-            }
-        }
-        Err(error) => Ok(make_fallback_slide_outline(&context, &request, &error)),
+    match complete_text_with_model(&prompt, &request.settings).await {
+        Ok(markdown) if !markdown.trim().is_empty() => Ok(clean_model_markdown_text(&markdown)),
+        Ok(_) => Ok(make_fallback_slide_outline_markdown(
+            &context,
+            &request,
+            "Model returned empty content.",
+        )),
+        Err(error) => Ok(make_fallback_slide_outline_markdown(
+            &context, &request, &error,
+        )),
     }
 }
 
@@ -247,6 +275,7 @@ async fn build_project_graph_input(
     rebuild: Option<bool>,
 ) -> Result<ProjectGraphInput, String> {
     let project_path = PathBuf::from(path);
+    migrate_project_build_cache(&project_path)?;
     let project = scan_project_path(project_path.clone())?;
     let rebuild = rebuild.unwrap_or(false);
     let mut build_config = if rebuild {
@@ -341,8 +370,20 @@ async fn build_project_graph_input(
 }
 
 #[tauri::command]
-async fn save_project_graph(project_path: String, graph_json: String) -> Result<(), String> {
-    let conn = open_app_db()?;
+async fn save_project_graph(
+    app: tauri::AppHandle,
+    project_path: String,
+    graph_json: String,
+) -> Result<(), String> {
+    save_project_graph_to_db(&app, project_path, graph_json)
+}
+
+fn save_project_graph_to_db(
+    app: &tauri::AppHandle,
+    project_path: String,
+    graph_json: String,
+) -> Result<(), String> {
+    let conn = open_app_db(app)?;
     conn.execute(
         "INSERT INTO project_graphs (project_path, graph_json, updated_at)
          VALUES (?1, ?2, strftime('%s','now'))
@@ -355,8 +396,18 @@ async fn save_project_graph(project_path: String, graph_json: String) -> Result<
 }
 
 #[tauri::command]
-async fn load_project_graph(project_path: String) -> Result<Option<String>, String> {
-    let conn = open_app_db()?;
+async fn load_project_graph(
+    app: tauri::AppHandle,
+    project_path: String,
+) -> Result<Option<String>, String> {
+    load_project_graph_from_db(&app, project_path)
+}
+
+fn load_project_graph_from_db(
+    app: &tauri::AppHandle,
+    project_path: String,
+) -> Result<Option<String>, String> {
+    let conn = open_app_db(app)?;
     let mut stmt = conn
         .prepare("SELECT graph_json FROM project_graphs WHERE project_path = ?1")
         .map_err(|err| err.to_string())?;
@@ -371,6 +422,109 @@ async fn load_project_graph(project_path: String) -> Result<Option<String>, Stri
     }
 }
 
+#[tauri::command]
+async fn save_project_chunk_embeddings(
+    app: tauri::AppHandle,
+    embeddings: Vec<ChunkEmbeddingInput>,
+) -> Result<usize, String> {
+    let conn = open_app_db(&app)?;
+    let mut saved = 0;
+    for item in embeddings {
+        let embedding_json =
+            serde_json::to_string(&item.embedding).map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT INTO chunk_embeddings (
+                project_path, chunk_id, document_path, document_name, chunk_index, text,
+                text_hash, provider, model, dimensions, embedding_json, updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, strftime('%s','now'))
+             ON CONFLICT(project_path, chunk_id, provider, model)
+             DO UPDATE SET
+                document_path = excluded.document_path,
+                document_name = excluded.document_name,
+                chunk_index = excluded.chunk_index,
+                text = excluded.text,
+                text_hash = excluded.text_hash,
+                dimensions = excluded.dimensions,
+                embedding_json = excluded.embedding_json,
+                updated_at = excluded.updated_at",
+            params![
+                item.project_path,
+                item.chunk_id,
+                item.document_path,
+                item.document_name,
+                item.chunk_index as i64,
+                item.text,
+                item.text_hash,
+                item.provider,
+                item.model,
+                item.dimensions as i64,
+                embedding_json
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+        saved += 1;
+    }
+    Ok(saved)
+}
+
+#[tauri::command]
+async fn search_project_embeddings(
+    app: tauri::AppHandle,
+    request: SemanticSearchRequest,
+) -> Result<Vec<SemanticSearchResult>, String> {
+    let conn = open_app_db(&app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT chunk_id, document_path, document_name, chunk_index, text, embedding_json
+             FROM chunk_embeddings
+             WHERE project_path = ?1 AND provider = ?2 AND model = ?3",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![request.project_path, request.provider, request.model],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .map_err(|err| err.to_string())?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        let (chunk_id, document_path, document_name, chunk_index, text, embedding_json) =
+            row.map_err(|err| err.to_string())?;
+        let embedding: Vec<f64> =
+            serde_json::from_str(&embedding_json).map_err(|err| err.to_string())?;
+        let score = cosine_similarity(&request.embedding, &embedding);
+        if score.is_finite() {
+            results.push(SemanticSearchResult {
+                chunk_id,
+                document_path,
+                document_name,
+                chunk_index: chunk_index as usize,
+                text,
+                score,
+            });
+        }
+    }
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(request.limit.clamp(1, 24));
+    Ok(results)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -382,17 +536,19 @@ pub fn run() {
             scan_project_documents,
             build_project_graph_input,
             save_project_graph,
-            load_project_graph
+            load_project_graph,
+            save_project_chunk_embeddings,
+            search_project_embeddings
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Brain Graph");
+        .expect("error while running AnshuDoc");
 }
 
-fn open_app_db() -> Result<Connection, String> {
-    let home = std::env::var("HOME").map_err(|err| err.to_string())?;
-    let dir = PathBuf::from(home).join(".brain_grap");
+fn open_app_db(app: &tauri::AppHandle) -> Result<Connection, String> {
+    let dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let db_path = dir.join("brain_graph.sqlite");
+    let db_path = dir.join("anshu_doc.sqlite");
+    migrate_legacy_app_db(&db_path)?;
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS project_graphs (
@@ -403,7 +559,73 @@ fn open_app_db() -> Result<Connection, String> {
         [],
     )
     .map_err(|err| err.to_string())?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            project_path TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            document_path TEXT NOT NULL,
+            document_name TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL,
+            embedding_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(project_path, chunk_id, provider, model)
+        )",
+        [],
+    )
+    .map_err(|err| err.to_string())?;
     Ok(conn)
+}
+
+fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
+    let len = left.len().min(right.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for index in 0..len {
+        let a = left[index];
+        let b = right[index];
+        dot += a * b;
+        left_norm += a * a;
+        right_norm += b * b;
+    }
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        dot / (left_norm.sqrt() * right_norm.sqrt())
+    }
+}
+
+fn migrate_legacy_app_db(db_path: &Path) -> Result<(), String> {
+    if db_path.exists() {
+        return Ok(());
+    }
+
+    let Ok(home) = std::env::var("HOME") else {
+        return Ok(());
+    };
+    let legacy_paths = [
+        PathBuf::from(&home)
+            .join(".brain_grap")
+            .join("brain_graph.sqlite"),
+        PathBuf::from(home)
+            .join(".brain_graph")
+            .join("brain_graph.sqlite"),
+    ];
+    for legacy_path in legacy_paths {
+        if legacy_path.exists() {
+            fs::copy(&legacy_path, db_path).map_err(|err| err.to_string())?;
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn scan_project_path(path: PathBuf) -> Result<ProjectInfo, String> {
@@ -517,6 +739,10 @@ fn markitdown_command_candidates() -> Vec<PathBuf> {
 
     let mut candidates = Vec::new();
 
+    if let Ok(path) = std::env::var("ANSHU_DOC_MARKITDOWN_SIDECAR") {
+        candidates.push(PathBuf::from(path));
+    }
+
     if let Ok(path) = std::env::var("BRAIN_GRAPH_MARKITDOWN_SIDECAR") {
         candidates.push(PathBuf::from(path));
     }
@@ -545,14 +771,14 @@ fn run_markitdown_command(command: &Path, path: &Path) -> Result<Option<String>,
         return Ok(None);
     }
 
-    let is_brain_graph_sidecar = command
+    let is_anshu_doc_sidecar = command
         .file_name()
         .and_then(|name| name.to_str())
         .map(|name| name.starts_with("markitdown-sidecar"))
         .unwrap_or(false);
     let mut process = Command::new(command);
     process.arg(path);
-    if is_brain_graph_sidecar {
+    if is_anshu_doc_sidecar {
         process.arg("--max-chars").arg("200000");
     }
     let output = process.output();
@@ -583,7 +809,7 @@ fn run_markitdown_command(command: &Path, path: &Path) -> Result<Option<String>,
 }
 
 fn project_cache_dir(project_path: &Path) -> PathBuf {
-    project_path.join(".brain_graph")
+    project_path.join(".anshusoft-grove").join("anshu-doc")
 }
 
 fn project_markdown_dir(project_path: &Path) -> PathBuf {
@@ -592,6 +818,32 @@ fn project_markdown_dir(project_path: &Path) -> PathBuf {
 
 fn project_build_config_path(project_path: &Path) -> PathBuf {
     project_cache_dir(project_path).join("config.json")
+}
+
+fn migrate_project_build_cache(project_path: &Path) -> Result<(), String> {
+    let next_dir = project_cache_dir(project_path);
+    if next_dir.exists() {
+        return Ok(());
+    }
+
+    for legacy_dir in legacy_project_cache_dirs(project_path) {
+        if !legacy_dir.exists() {
+            continue;
+        }
+        if let Some(parent) = next_dir.parent() {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        fs::rename(legacy_dir, next_dir).map_err(|err| err.to_string())?;
+        break;
+    }
+    Ok(())
+}
+
+fn legacy_project_cache_dirs(project_path: &Path) -> [PathBuf; 2] {
+    [
+        project_path.join(".brain_graph"),
+        project_path.join(".brain_grap"),
+    ]
 }
 
 fn load_project_build_config(project_path: &Path) -> Result<ProjectBuildConfig, String> {
@@ -625,6 +877,11 @@ fn reset_project_build_cache(project_path: &Path) -> Result<(), String> {
     let config_path = project_build_config_path(project_path);
     if config_path.exists() {
         fs::remove_file(config_path).map_err(|err| err.to_string())?;
+    }
+    for legacy_dir in legacy_project_cache_dirs(project_path) {
+        if legacy_dir.exists() {
+            let _ = fs::remove_dir_all(legacy_dir);
+        }
     }
     Ok(())
 }
@@ -934,38 +1191,19 @@ fn make_slide_outline_context(
 
 fn make_slide_outline_prompt(context: &Value, request: &SlideOutlineRequest) -> String {
     format!(
-        r#"You are a senior presentation strategist. Generate a slide outline from a project knowledge graph.
-
-Return JSON only with this exact shape:
-{{
-  "title": "deck title",
-  "audience": "target audience",
-  "goal": "deck goal",
-  "language": "zh or en",
-  "slides": [
-    {{
-      "index": 1,
-      "title": "slide title",
-      "purpose": "why this slide exists",
-      "bullets": ["short point"],
-      "visual": {{"type": "chart/table/diagram/summary_cards/network", "reason": "why"}},
-      "evidence": [{{"source": "document name", "concepts": ["concept"], "quote": "short supporting quote"}}],
-      "speakerNotes": "brief talk track"
-    }}
-  ]
-}}
+        r#"You are a senior presentation strategist. Generate a readable Markdown slide outline from a project knowledge graph and evidence snippets.
 
 Rules:
 - Create about {} slides.
 - Write for audience: {}.
 - Answer the user's question directly.
-- Use evidence from the context. Do not invent facts.
-- Make slide titles specific and decision-oriented.
-- Keep bullets concise.
-- The root JSON object MUST contain "title", "audience", "goal", "language", and "slides".
-- The "slides" field MUST be an array with slide objects.
-- Do not return graph nodes, entity records, translated field names, markdown, or explanations.
-- Keep JSON property names exactly in English as shown in the schema.
+- Output Markdown only. Do not output JSON.
+- Use only facts supported by the context evidence and subgraph. Do not invent tools, products, metrics, or workflows.
+- Merge duplicate topics.
+- Make slide titles specific and useful for the audience.
+- For each slide include: purpose, 2-4 bullets, suggested visual, and speaker notes.
+- Include short evidence references when useful, using document name or chunk index.
+- If evidence is insufficient, say what should be verified instead of inventing details.
 
 Context JSON:
 {}"#,

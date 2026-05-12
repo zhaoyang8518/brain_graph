@@ -1,6 +1,7 @@
 export type Language = "zh" | "en";
 
-const LANGUAGE_KEY = "brain-graph:language";
+const LANGUAGE_KEY = "anshu-doc:language";
+const LEGACY_LANGUAGE_KEY = "brain-graph:language";
 
 const messages = {
   zh: {
@@ -14,14 +15,22 @@ const messages = {
     returnToApp: "返回应用",
     general: "通用",
     models: "模型",
+    advanced: "高级",
     language: "语言",
     generalDescription: "配置应用偏好。",
-    modelsDescription: "配置概念抽取模型。未启用或不可用时，Brain Graph 使用本地分析。",
+    modelsDescription: "配置概念抽取模型。未启用或不可用时，AnshuDoc 使用本地分析。",
+    embedding: "语义增强",
+    embeddingDescription: "配置 Embedding 供应商。未启用时，RAG 使用图谱和关键词检索回退。",
+    enableEmbedding: "启用语义增强",
+    embeddingProvider: "Embedding 供应商",
+    embeddingModel: "Embedding 模型",
+    dimensions: "向量维度",
     useModelExtraction: "使用模型抽取",
     provider: "供应商",
     model: "模型",
     baseUrl: "Base URL",
     apiKey: "API Key",
+    groupId: "Group ID",
     save: "保存",
     reset: "重置",
     buildGraph: "构建图谱",
@@ -52,14 +61,22 @@ const messages = {
     returnToApp: "Return to App",
     general: "General",
     models: "Models",
+    advanced: "Advanced",
     language: "Language",
     generalDescription: "Configure application preferences.",
-    modelsDescription: "Configure concept extraction providers. When disabled or unavailable, Brain Graph uses local analysis.",
+    modelsDescription: "Configure concept extraction providers. When disabled or unavailable, AnshuDoc uses local analysis.",
+    embedding: "Semantic Enhancement",
+    embeddingDescription: "Configure embedding providers. When disabled, RAG falls back to graph and keyword retrieval.",
+    enableEmbedding: "Enable Semantic Enhancement",
+    embeddingProvider: "Embedding Provider",
+    embeddingModel: "Embedding Model",
+    dimensions: "Dimensions",
     useModelExtraction: "Use model extraction",
     provider: "Provider",
     model: "Model",
     baseUrl: "Base URL",
     apiKey: "API Key",
+    groupId: "Group ID",
     save: "Save",
     reset: "Reset",
     buildGraph: "Build Graph",
@@ -84,7 +101,7 @@ const messages = {
 export type MessageKey = keyof typeof messages.zh;
 
 export function loadLanguage(): Language {
-  const value = localStorage.getItem(LANGUAGE_KEY);
+  const value = localStorage.getItem(LANGUAGE_KEY) ?? localStorage.getItem(LEGACY_LANGUAGE_KEY);
   return value === "en" ? "en" : "zh";
 }
 

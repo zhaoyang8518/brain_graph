@@ -2,6 +2,7 @@ import Graph from "graphology";
 import { applyGraphVisualEncoding } from "./visualEncoding";
 import { type TypedConcept, extractConceptsWithModel, type ModelSettings } from "./model";
 import { buildProjectGraphInput, type ProjectInfo } from "./projects";
+import { buildProjectEmbeddings, type EmbeddingSettings } from "./embedding";
 
 const MODEL_REQUEST_TIMEOUT_SECONDS = 90;
 
@@ -113,6 +114,7 @@ const MAX_GRAPH_EDGES = 1400;
 export async function buildBrainGraph(
   project: ProjectInfo,
   settings: ModelSettings,
+  embeddingSettings: EmbeddingSettings,
   onProgress: BuildProgressHandler,
   rebuild = false
 ): Promise<BrainGraph> {
@@ -165,7 +167,9 @@ export async function buildBrainGraph(
         `Merged concept mentions: ${mergedTerms.length.toLocaleString()}.`,
         "Computing frequencies, co-occurrence edges, PageRank, and communities."
       ]);
-      return buildBrainGraphFromTerms(mergedTerms);
+      const graph = buildBrainGraphFromTerms(mergedTerms);
+      await maybeBuildSemanticIndex(project.path, input.chunks ?? [], embeddingSettings, onProgress);
+      return graph;
     } catch (error) {
       console.warn("Model extraction failed, falling back to local graph construction.", error);
       onProgress(70, "Model unavailable, using local analysis...", [
@@ -179,7 +183,35 @@ export async function buildBrainGraph(
     `Using ${backendChunks.length ? backendChunks.length.toLocaleString() : "single text"} chunk source.`,
     "Computing local terms and chunk-level co-occurrence edges."
   ]);
-  return backendChunks.length ? buildBrainGraphFromChunkTexts(backendChunks) : buildBrainGraphFromText(input.text);
+  const graph = backendChunks.length ? buildBrainGraphFromChunkTexts(backendChunks) : buildBrainGraphFromText(input.text);
+  await maybeBuildSemanticIndex(project.path, input.chunks ?? [], embeddingSettings, onProgress);
+  return graph;
+}
+
+async function maybeBuildSemanticIndex(
+  projectPath: string,
+  chunks: NonNullable<Awaited<ReturnType<typeof buildProjectGraphInput>>["chunks"]>,
+  settings: EmbeddingSettings,
+  onProgress: BuildProgressHandler
+) {
+  if (!settings.enabled || settings.provider !== "ollama" || chunks.length === 0) return;
+  onProgress(88, "Generating semantic embeddings...", [
+    `Provider: Ollama.`,
+    `Model: ${settings.model}.`,
+    `Chunks: ${chunks.length.toLocaleString()}.`
+  ]);
+  const saved = await buildProjectEmbeddings(projectPath, chunks, settings, (done, total) => {
+    const percent = 88 + Math.round((done / Math.max(1, total)) * 9);
+    onProgress(percent, `Generating semantic embeddings (${done}/${total})...`, [
+      `Provider: Ollama.`,
+      `Model: ${settings.model}.`,
+      `Embedding cache is stored in AnshuDoc SQLite.`
+    ]);
+  });
+  onProgress(98, "Semantic index updated.", [
+    `Saved embeddings: ${saved.toLocaleString()}.`,
+    "Summaries can now use semantic retrieval evidence."
+  ]);
 }
 
 export function buildBrainGraphFromText(text: string, windowSize = 4): BrainGraph {

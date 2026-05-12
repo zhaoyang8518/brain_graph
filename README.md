@@ -4,12 +4,12 @@
 
 ---
 
-**Brain Graph: A local-first, knowledge-graph-powered document intelligence platform.**
+**AnshuDoc: A local-first, knowledge-graph-powered document intelligence platform.**
 
-Brain Graph transforms fragmented documents into a structured, interlinked network of concepts. It doesn't just store information; it **compiles** it. By integrating graph theory (PageRank, Community Detection) with modern LLMs, it reveals the "hidden architecture" of your projects, research, and data.
+AnshuDoc transforms fragmented documents into a structured, interlinked network of concepts. It doesn't just store information; it **compiles** it. By integrating graph theory (PageRank, Community Detection) with modern LLMs, it reveals the "hidden architecture" of your projects, research, and data.
 
 ### 🎯 The Philosophy
-*   **Knowledge Compounding**: Unlike traditional RAG that rediscovers knowledge on every query, Brain Graph maintains a persistent, evolving wiki-layer.
+*   **Knowledge Compounding**: Unlike traditional RAG that rediscovers knowledge on every query, AnshuDoc maintains a persistent, evolving wiki-layer.
 *   **Graph-First Architecture**: The graph is the core index, enabling structural insights that flat text search can't provide.
 *   **Local-First & Private**: Full control over your data. Optimized for local LLMs like Ollama.
 
@@ -31,8 +31,8 @@ Brain Graph transforms fragmented documents into a structured, interlinked netwo
     *   Ensure Rust, Node.js, and pnpm are installed.
 2.  **Clone & Install**:
     ```bash
-    git clone https://github.com/zhaoyang8518/brain_graph.git
-    cd brain_graph
+    git clone https://github.com/Anshusoft-Grove/anshu-doc.git anshu_doc
+    cd anshu_doc
     pnpm install
     ```
 3.  **Run**:

@@ -1,12 +1,12 @@
 [package]
-name = "brain_graph"
+name = "anshu_doc"
 version = "0.1.0"
-description = "Brain Graph desktop text network analysis"
+description = "AnshuDoc desktop document intelligence"
 authors = ["zhaoyang"]
 edition = "2021"
 
 [lib]
-name = "brain_graph_lib"
+name = "anshu_doc_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
