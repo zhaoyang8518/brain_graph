@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "sidecar:markitdown": "bash sidecars/build_markitdown_sidecar.sh"
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",

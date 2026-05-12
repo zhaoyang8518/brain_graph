@@ -5,3 +5,10 @@ src-tauri/gen/
 .DS_Store
 *.log
 DEVELOPMENT.md
+.venv-markitdown/
+sidecars/build/
+sidecars/dist/
+sidecars/pip-cache/
+markitdown-sidecar.spec
+src-tauri/binaries/markitdown-sidecar*
+!src-tauri/binaries/.gitkeep

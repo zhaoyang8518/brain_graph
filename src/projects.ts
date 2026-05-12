@@ -14,10 +14,33 @@ export type ProjectInfo = {
   documents: ProjectDocument[];
 };
 
+export type ProjectMarkdownDocument = {
+  path: string;
+  name: string;
+  extension: string;
+  markdown: string;
+  charCount: number;
+};
+
+export type ProjectChunk = {
+  id: string;
+  documentPath: string;
+  documentName: string;
+  index: number;
+  text: string;
+  charCount: number;
+};
+
 export type ProjectGraphInput = {
   text: string;
   documentsRead: number;
   documentsSkipped: number;
+  documents?: ProjectMarkdownDocument[];
+  chunks?: ProjectChunk[];
+};
+
+export type BuildGraphInputOptions = {
+  rebuild?: boolean;
 };
 
 const PROJECTS_KEY = "brain-graph:projects";
@@ -51,9 +74,9 @@ export async function refreshProject(path: string): Promise<ProjectInfo> {
   throw new Error("Project scanning is available in the Tauri desktop app.");
 }
 
-export async function buildProjectGraphInput(path: string): Promise<ProjectGraphInput> {
+export async function buildProjectGraphInput(path: string, options: BuildGraphInputOptions = {}): Promise<ProjectGraphInput> {
   if (isTauriRuntime()) {
-    return invoke<ProjectGraphInput>("build_project_graph_input", { path });
+    return invoke<ProjectGraphInput>("build_project_graph_input", { path, rebuild: options.rebuild ?? false });
   }
   throw new Error("Project graph construction is available in the Tauri desktop app.");
 }

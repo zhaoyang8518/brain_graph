@@ -40,6 +40,8 @@ export type BrainGraph = {
   };
 };
 
+export type BuildProgressHandler = (percent: number, message: string, details?: string[]) => void;
+
 export type StoredBrainGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -109,34 +111,69 @@ const MAX_GRAPH_EDGES = 1400;
 export async function buildBrainGraph(
   project: ProjectInfo,
   settings: ModelSettings,
-  onProgress: (percent: number, message: string) => void
+  onProgress: BuildProgressHandler,
+  rebuild = false
 ): Promise<BrainGraph> {
-  onProgress(10, "Reading project documents...");
-  const input = await buildProjectGraphInput(project.path);
+  onProgress(10, "Reading project documents...", [
+    rebuild ? "Rebuild mode: clearing cached markdown before conversion." : "Incremental mode: reusing unchanged markdown files.",
+    "Converting project documents to Markdown and preparing chunks."
+  ]);
+  const input = await buildProjectGraphInput(project.path, { rebuild });
+  const backendChunks = (input.chunks ?? []).map((chunk) => chunk.text).filter(Boolean);
+  const totalChunkChars = backendChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  onProgress(18, "Prepared Markdown chunks.", [
+    `Readable documents: ${input.documentsRead}; skipped: ${input.documentsSkipped}.`,
+    `Markdown chunks: ${backendChunks.length}; total chunk text: ${totalChunkChars.toLocaleString()} chars.`,
+    `Source text available for summary: ${(input.text || "").length.toLocaleString()} chars.`
+  ]);
 
   if (settings.enabled) {
     try {
-      const chunks = chunkMarkdownText(input.text, MODEL_CHUNK_SIZE).slice(0, MAX_MODEL_CHUNKS);
+      const chunks = (backendChunks.length ? backendChunks : chunkMarkdownText(input.text, MODEL_CHUNK_SIZE)).slice(0, MAX_MODEL_CHUNKS);
       const modelConcepts: TypedConcept[] = [];
+      let extractedConcepts = 0;
       for (let index = 0; index < chunks.length; index += 1) {
         const percent = 25 + Math.round((index / Math.max(1, chunks.length)) * 45);
-        onProgress(percent, `Extracting concepts with ${settings.provider} (${index + 1}/${chunks.length})...`);
+        onProgress(percent, `Extracting concepts with ${settings.provider} (${index + 1}/${chunks.length})...`, [
+          `Current chunk: ${(index + 1).toLocaleString()} / ${chunks.length.toLocaleString()}.`,
+          `Chunk size: ${chunks[index].length.toLocaleString()} chars.`,
+          `Concepts extracted so far: ${extractedConcepts.toLocaleString()}.`
+        ]);
         const result = await extractConceptsWithModel(chunks[index], settings);
         modelConcepts.push(...result.concepts);
+        extractedConcepts = modelConcepts.length;
+        onProgress(percent + 1, `Extracted concepts with ${settings.provider} (${index + 1}/${chunks.length})`, [
+          `Latest chunk concepts: ${result.concepts.length.toLocaleString()}.`,
+          `Total model concepts: ${extractedConcepts.toLocaleString()}.`,
+          `Provider: ${result.providerUsed}.`
+        ]);
       }
-      onProgress(78, "Merging local and model concepts...");
+      onProgress(78, "Merging local and model concepts...", [
+        `Model concepts: ${modelConcepts.length.toLocaleString()}.`,
+        "Local terms are retained for frequency and fallback coverage."
+      ]);
       const localTerms = tokenize(input.text || "").map((name) => ({ name, kind: "Term" }));
       const mergedTerms = mergeLocalAndModelTerms(localTerms, modelConcepts);
-      onProgress(85, "Building network...");
+      onProgress(85, "Building network...", [
+        `Local terms: ${localTerms.length.toLocaleString()}.`,
+        `Merged concept mentions: ${mergedTerms.length.toLocaleString()}.`,
+        "Computing frequencies, co-occurrence edges, PageRank, and communities."
+      ]);
       return buildBrainGraphFromTerms(mergedTerms);
     } catch (error) {
       console.warn("Model extraction failed, falling back to local graph construction.", error);
-      onProgress(70, "Model unavailable, using local analysis...");
+      onProgress(70, "Model unavailable, using local analysis...", [
+        error instanceof Error ? error.message : String(error),
+        "Falling back to local tokenization and chunk-level co-occurrence."
+      ]);
     }
   }
 
-  onProgress(60, "Analyzing text patterns...");
-  return buildBrainGraphFromText(input.text);
+  onProgress(60, "Analyzing text patterns...", [
+    `Using ${backendChunks.length ? backendChunks.length.toLocaleString() : "single text"} chunk source.`,
+    "Computing local terms and chunk-level co-occurrence edges."
+  ]);
+  return backendChunks.length ? buildBrainGraphFromChunkTexts(backendChunks) : buildBrainGraphFromText(input.text);
 }
 
 export function buildBrainGraphFromText(text: string, windowSize = 4): BrainGraph {
@@ -144,8 +181,20 @@ export function buildBrainGraphFromText(text: string, windowSize = 4): BrainGrap
   return buildBrainGraphFromTerms(terms, windowSize);
 }
 
+export function buildBrainGraphFromChunkTexts(chunks: string[], windowSize = 4): BrainGraph {
+  const termChunks = chunks.map((chunk) => tokenize(chunk || "").map((name) => ({ name, kind: "Term" })));
+  return buildBrainGraphFromTermChunks(termChunks, windowSize);
+}
+
 export function buildBrainGraphFromTerms(concepts: TypedConcept[], windowSize = 4): BrainGraph {
-  const tokens = normalizeTerms(concepts);
+  return buildBrainGraphFromTermChunks([concepts], windowSize);
+}
+
+function buildBrainGraphFromTermChunks(conceptChunks: TypedConcept[][], windowSize = 4): BrainGraph {
+  const tokenChunks = conceptChunks
+    .map((chunk) => normalizeTerms(chunk))
+    .filter((chunk) => chunk.length > 0);
+  const tokens = tokenChunks.flat();
   const frequencies = new Map<string, number>();
   const edgeWeights = new Map<string, number>();
   const conceptKinds = new Map<string, string>();
@@ -155,16 +204,18 @@ export function buildBrainGraphFromTerms(concepts: TypedConcept[], windowSize = 
     conceptKinds.set(token.name, token.kind);
   }
 
-  const names = tokens.map((t) => t.name);
-  for (let index = 0; index < names.length; index += 1) {
-    const current = names[index];
-    const upper = Math.min(names.length, index + windowSize);
-    for (let next = index + 1; next < upper; next += 1) {
-      const other = names[next];
-      if (current === other) continue;
-      const [source, target] = [current, other].sort();
-      const key = `${source}\u0000${target}`;
-      edgeWeights.set(key, (edgeWeights.get(key) ?? 0) + 1);
+  for (const tokenChunk of tokenChunks) {
+    const names = tokenChunk.map((t) => t.name);
+    for (let index = 0; index < names.length; index += 1) {
+      const current = names[index];
+      const upper = Math.min(names.length, index + windowSize);
+      for (let next = index + 1; next < upper; next += 1) {
+        const other = names[next];
+        if (current === other) continue;
+        const [source, target] = [current, other].sort();
+        const key = `${source}\u0000${target}`;
+        edgeWeights.set(key, (edgeWeights.get(key) ?? 0) + 1);
+      }
     }
   }
 

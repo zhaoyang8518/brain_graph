@@ -52,6 +52,7 @@ import {
   hydrateBrainGraph,
   serializeBrainGraph,
   buildBrainGraph,
+  type BuildProgressHandler,
   type BrainGraph,
   type GraphNode
 } from "./graph";
@@ -71,6 +72,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 type ProjectContentMode = "graph" | "summary";
+type BuildProgressState = { percent: number; message: string; details?: string[] };
 
 type ParsedDocument = {
   name: string;
@@ -267,7 +269,7 @@ export default function App() {
   const [colorMode, setColorMode] = useState<NodeColorMode>("community");
   const [modelSettings, setModelSettings] = useState<ModelSettings>(loadModelSettings());
   const [status, setStatus] = useState<string>("");
-  const [buildProgress, setBuildProgress] = useState<{ percent: number, message: string } | null>(null);
+  const [buildProgress, setBuildProgress] = useState<BuildProgressState | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
@@ -392,6 +394,10 @@ export default function App() {
     setSelectedProjectId(newProject.id);
   };
 
+  const updateBuildProgress: BuildProgressHandler = (percent, message, details = []) => {
+    setBuildProgress({ percent, message, details });
+  };
+
   const handleBuildGraph = async () => {
     const project = projects.find(p => p.id === selectedProjectId);
     if (!project) return;
@@ -401,13 +407,11 @@ export default function App() {
       setBuildProgress({ percent: 0, message: t("readingDocuments") });
       // This part would ideally be async with progress reporting from Tauri
       // For now, keeping it consistent with legacy imperative logic
-      const graph = await buildBrainGraph(project, modelSettings, (percent, msg) => {
-        setBuildProgress({ percent, message: msg });
-      });
+      const graph = await buildBrainGraph(project, modelSettings, updateBuildProgress, false);
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
-      setBuildProgress({ percent: 92, message: "Generating document summary..." });
+      setBuildProgress({ percent: 92, message: "Generating document summary...", details: ["Loading prepared Markdown content for project summary."] });
       const input = await buildProjectGraphInput(project.path);
       saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
       setBuildProgress(null);
@@ -418,24 +422,22 @@ export default function App() {
     }
   };
 
-  const handleBuildProjectGraph = async (project: ProjectInfo) => {
+  const handleBuildProjectGraph = async (project: ProjectInfo, rebuild = false) => {
     setSelectedProjectId(project.id);
     setProjectMenuId(null);
     setIsSummaryDrawerOpen(false);
 
     try {
-      setBuildProgress({ percent: 0, message: t("readingDocuments") });
-      const graph = await buildBrainGraph(project, modelSettings, (percent, msg) => {
-        setBuildProgress({ percent, message: msg });
-      });
+      setBuildProgress({ percent: 0, message: rebuild ? "Clearing graph cache..." : t("readingDocuments") });
+      const graph = await buildBrainGraph(project, modelSettings, updateBuildProgress, rebuild);
 
       setCurrentGraph(graph);
       await saveProjectGraph(project.path, JSON.stringify(serializeBrainGraph(graph)));
-      setBuildProgress({ percent: 92, message: "Generating document summary..." });
+      setBuildProgress({ percent: 92, message: "Generating document summary...", details: ["Loading prepared Markdown content for project summary."] });
       const input = await buildProjectGraphInput(project.path);
       saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
       setBuildProgress(null);
-      setStatus(`Graph built for ${project.name}`);
+      setStatus(`${rebuild ? "Rebuilt" : "Incrementally built"} graph for ${project.name}`);
     } catch (error) {
       setBuildProgress(null);
       setStatus(`Build failed: ${error}`);
@@ -600,8 +602,11 @@ export default function App() {
 
                 {projectMenuId === project.id && (
                   <div className="absolute right-2 top-9 z-40 w-40 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl">
-                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project)}>
-                      构建图谱
+                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, false)}>
+                      增量构建图谱
+                    </button>
+                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleBuildProjectGraph(project, true)}>
+                      重新构建图谱
                     </button>
                     <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleRefreshProject(project)}>
                       刷新
@@ -760,10 +765,10 @@ export default function App() {
           )}
 
           {buildProgress && (
-            <Card className="absolute bottom-8 left-1/2 -translate-x-1/2 w-80 shadow-2xl border-primary/20 bg-background/90 backdrop-blur-xl animate-in zoom-in-95">
+            <Card className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[min(520px,calc(100%-48px))] shadow-2xl border-primary/20 bg-background/90 backdrop-blur-xl animate-in zoom-in-95">
               <CardContent className="p-4 pt-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-bold uppercase tracking-widest">{buildProgress.message}</span>
+                  <span className="min-w-0 pr-4 text-[10px] font-bold uppercase tracking-widest">{buildProgress.message}</span>
                   <span className="text-[10px] font-bold">{Math.round(buildProgress.percent)}%</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
@@ -772,6 +777,16 @@ export default function App() {
                     style={{ width: `${buildProgress.percent}%` }}
                   />
                 </div>
+                {buildProgress.details && buildProgress.details.length > 0 && (
+                  <div className="mt-3 space-y-1 border-t pt-3 text-[11px] leading-5 text-muted-foreground">
+                    {buildProgress.details.slice(0, 4).map((detail, index) => (
+                      <div key={index} className="flex gap-2">
+                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-primary/70" />
+                        <span className="min-w-0 break-words">{detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -899,7 +914,7 @@ export default function App() {
             </div>
             <ScrollArea className="flex-1">
               <div className="p-6">
-                <MarkdownPreview markdown={summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“构建图谱”，摘要会在图谱构建完成后自动生成。"} />
+                <MarkdownPreview markdown={summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“增量构建图谱”或“重新构建图谱”，摘要会在图谱构建完成后自动生成。"} />
               </div>
             </ScrollArea>
           </div>
