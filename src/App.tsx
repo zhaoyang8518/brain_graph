@@ -16,7 +16,8 @@ import {
   Search,
   CheckCircle2,
   AlertCircle,
-  Lightbulb
+  Lightbulb,
+  X
 } from "lucide-react";
 
 // UI Components
@@ -69,7 +70,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-type ContentMode = "graph" | "summary";
+type ProjectContentMode = "graph" | "summary";
 
 type ParsedDocument = {
   name: string;
@@ -273,7 +274,7 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(288);
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
-  const [contentMode, setContentMode] = useState<ContentMode>("graph");
+  const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, string>>(() => {
     const raw = localStorage.getItem("brain-graph:project-summaries");
     if (!raw) return {};
@@ -355,7 +356,7 @@ export default function App() {
     rendererRef.current = null;
     renderer2dRef.current?.destroy();
     renderer2dRef.current = null;
-    if (!currentGraph || contentMode !== "graph") return;
+    if (!currentGraph) return;
 
     applyGraphVisualEncoding(currentGraph.graph, currentGraph.nodes, currentGraph.edges, colorMode);
 
@@ -378,7 +379,7 @@ export default function App() {
       rendererRef.current?.destroy();
       rendererRef.current = null;
     };
-  }, [currentGraph, viewMode, colorMode, selectNode, contentMode]);
+  }, [currentGraph, viewMode, colorMode, selectNode]);
 
   // --- Actions ---
 
@@ -394,6 +395,7 @@ export default function App() {
   const handleBuildGraph = async () => {
     const project = projects.find(p => p.id === selectedProjectId);
     if (!project) return;
+    setIsSummaryDrawerOpen(false);
 
     try {
       setBuildProgress({ percent: 0, message: t("readingDocuments") });
@@ -419,7 +421,7 @@ export default function App() {
   const handleBuildProjectGraph = async (project: ProjectInfo) => {
     setSelectedProjectId(project.id);
     setProjectMenuId(null);
-    setContentMode("graph");
+    setIsSummaryDrawerOpen(false);
 
     try {
       setBuildProgress({ percent: 0, message: t("readingDocuments") });
@@ -459,11 +461,16 @@ export default function App() {
     localStorage.setItem("brain-graph:project-summaries", JSON.stringify(nextSummaries));
   };
 
-  const showProjectContent = async (project: ProjectInfo, mode: ContentMode) => {
+  const showProjectContent = async (project: ProjectInfo, mode: ProjectContentMode) => {
     setSelectedProjectId(project.id);
-    setContentMode(mode);
     setProjectMenuId(null);
-    if (mode !== "summary" || summaries[project.id]) return;
+    if (mode === "graph") {
+      setIsSummaryDrawerOpen(false);
+      return;
+    }
+
+    setIsSummaryDrawerOpen(true);
+    if (summaries[project.id]) return;
 
     try {
       setIsInitialLoading(true);
@@ -571,7 +578,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       setSelectedProjectId(project.id);
-                      setContentMode("graph");
+                      setIsSummaryDrawerOpen(false);
                     }}
                     className="flex min-w-0 flex-1 items-center gap-3 text-left text-sm font-medium"
                   >
@@ -649,7 +656,7 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
+      <main className="relative flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="h-16 flex items-center justify-between px-8 border-b bg-background/80 backdrop-blur-md sticky top-0 z-10">
           <div className="flex flex-col">
@@ -730,26 +737,9 @@ export default function App() {
 
         {/* Graph Workspace */}
         <div className="flex-1 relative overflow-hidden bg-zinc-50 dark:bg-zinc-950">
-          <div ref={containerRef} className={cn("absolute inset-0", contentMode === "summary" && "hidden")} />
+          <div ref={containerRef} className="absolute inset-0" />
 
-          {contentMode === "summary" && selectedProject && (
-            <div className="absolute inset-0 overflow-auto bg-background p-8">
-              <div className="mx-auto max-w-3xl">
-                <div className="mb-6 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl font-semibold">{selectedProject.name}</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">项目摘要</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setContentMode("graph")}>
-                    显示图谱
-                  </Button>
-                </div>
-                <MarkdownPreview markdown={summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“构建图谱”，摘要会在图谱构建完成后自动生成。"} />
-              </div>
-            </div>
-          )}
-
-          {contentMode === "graph" && !currentGraph && (
+          {!currentGraph && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground p-12 text-center">
               {isInitialLoading ? (
                 <>
@@ -831,13 +821,13 @@ export default function App() {
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("topTerms")}</h3>
             </div>
             <ScrollArea className="flex-1">
-              <div className="grid grid-cols-2 gap-3 p-1 pr-4">
+              <div className="grid grid-cols-3 gap-2 p-1 pr-4">
                 {currentGraph?.nodes.slice(0, 20).map((node, i) => (
                   <button
                     key={node.id}
                     className={cn(
-                      "flex items-center justify-between px-3 py-2.5 rounded-xl transition-all text-left group border-2 border-transparent shadow-md hover:brightness-110 active:scale-[0.96]",
-                      activeHighlightId === node.id && "border-white/80 shadow-[0_0_15px_rgba(255,255,255,0.3)] z-10 scale-[1.05]"
+                      "relative flex items-center justify-between px-2 py-2.5 rounded-xl transition-all text-left group border-0 shadow-md hover:brightness-110 active:scale-[0.98] overflow-hidden",
+                      activeHighlightId === node.id && "pl-5 shadow-lg"
                     )}
                     style={{
                       backgroundColor: nodeColor(node, colorMode),
@@ -871,6 +861,12 @@ export default function App() {
                       selectNode(node.id);
                     }}
                   >
+                    {activeHighlightId === node.id && (
+                      <div className={cn(
+                        "absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl transition-all",
+                        isDark ? "bg-white shadow-[0_0_8px_rgba(255,255,255,0.4)]" : "bg-black"
+                      )} />
+                    )}
                     <span className="text-[11px] font-bold truncate mr-2 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
                       {node.label}
                     </span>
@@ -883,6 +879,31 @@ export default function App() {
             </ScrollArea>
           </div>
         </section>
+
+        {selectedProject && (
+          <div
+            className={cn(
+              "absolute bottom-0 right-0 top-16 z-30 flex w-[min(720px,calc(100%-32px))] max-w-full flex-col border-l bg-background shadow-2xl transition-transform duration-300 ease-out",
+              isSummaryDrawerOpen ? "translate-x-0" : "translate-x-full"
+            )}
+            aria-hidden={!isSummaryDrawerOpen}
+          >
+            <div className="flex h-16 shrink-0 items-center justify-between border-b px-6">
+              <div className="min-w-0">
+                <h2 className="truncate text-base font-semibold">{selectedProject.name}</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">项目文档综合摘要</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setIsSummaryDrawerOpen(false)} aria-label="关闭摘要">
+                <X size={18} />
+              </Button>
+            </div>
+            <ScrollArea className="flex-1">
+              <div className="p-6">
+                <MarkdownPreview markdown={summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“构建图谱”，摘要会在图谱构建完成后自动生成。"} />
+              </div>
+            </ScrollArea>
+          </div>
+        )}
       </main>
 
       {/* Settings Dialog */}
