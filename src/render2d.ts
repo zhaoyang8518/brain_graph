@@ -12,7 +12,8 @@ export type Graph2DRenderer = {
 export function render2DGraph(
   graph: BrainGraph,
   container: HTMLElement,
-  onNodeSelect: (nodeId: string) => void
+  onNodeSelect: (nodeId: string) => void,
+  onNodeContextMenu?: (nodeId: string, position: { x: number; y: number }) => void
 ): Graph2DRenderer {
   container.replaceChildren();
   container.style.background = "#363636ff";
@@ -84,6 +85,15 @@ export function render2DGraph(
   renderer.on("clickNode", ({ node }) => {
     onNodeSelect(node);
   });
+  renderer.on("rightClickNode", ({ node, event }: any) => {
+    const original = event?.original ?? event;
+    original?.preventDefault?.();
+    onNodeContextMenu?.(node, {
+      x: Number(original?.clientX ?? event?.x ?? 0),
+      y: Number(original?.clientY ?? event?.y ?? 0)
+    });
+  });
+  container.addEventListener("contextmenu", (event) => event.preventDefault());
 
   // 8. Hover effect (optional enhancement)
   let hoveredNode: string | null = null;

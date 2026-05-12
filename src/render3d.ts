@@ -21,7 +21,8 @@ export async function render3DGraph(
   graph: BrainGraph,
   container: HTMLElement,
   colorMode: NodeColorMode,
-  onNodeSelect: (nodeId: string) => void
+  onNodeSelect: (nodeId: string) => void,
+  onNodeContextMenu?: (nodeId: string, position: { x: number; y: number }) => void
 ): Promise<Graph3DRenderer> {
   container.replaceChildren();
   const { default: ForceGraph3D } = await import("3d-force-graph");
@@ -73,7 +74,13 @@ export async function render3DGraph(
         node,
         700
       );
+    })
+    .onNodeRightClick((node: any, event: MouseEvent) => {
+      event?.preventDefault?.();
+      onNodeContextMenu?.(String(node.id), { x: event.clientX, y: event.clientY });
     });
+
+  container.addEventListener("contextmenu", (event) => event.preventDefault());
 
   if (!isLargeGraph) {
     const { default: SpriteText } = await import("three-spritetext") as { default: SpriteTextConstructor };

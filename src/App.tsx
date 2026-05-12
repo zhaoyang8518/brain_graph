@@ -74,6 +74,8 @@ function clamp(value: number, min: number, max: number): number {
 
 type ProjectContentMode = "graph" | "summary";
 type BuildProgressState = { percent: number; message: string; details?: string[] };
+type NodeContextMenuState = { nodeId: string; x: number; y: number } | null;
+type SummaryDrawerState = { title: string; subtitle: string; markdown: string };
 
 type ParsedDocument = {
   name: string;
@@ -128,6 +130,46 @@ function createProjectSummary(project: ProjectInfo, graph: BrainGraph, sourceTex
     "- 再按“分文档要点”定位具体文档，回到原文件查看细节。",
     "- 如果摘要偏泛，建议启用 Ollama 或云模型，让模型基于解析后的文档正文生成更高质量摘要。"
   ].join("\n\n");
+}
+
+function createNodeSummary(
+  graph: BrainGraph,
+  nodeId: string,
+  sourceText: string,
+  mode: "node" | "related"
+): SummaryDrawerState {
+  const attrs = graph.graph.getNodeAttributes(nodeId);
+  const label = String(attrs.label || nodeId);
+  const relatedLabels = mode === "related"
+    ? graph.graph.neighbors(nodeId).map((neighbor) => String(graph.graph.getNodeAttribute(neighbor, "label") || neighbor))
+    : [];
+  const keywords = mode === "related" ? [label, ...relatedLabels] : [label];
+  const sentences = pickImportantSentences(sourceText, keywords, mode === "related" ? 12 : 8);
+  const relatedLines = relatedLabels.slice(0, 24).map((item) => `- ${item}`);
+  const markdown = [
+    `# ${label} ${mode === "related" ? "关联性摘要" : "摘要"}`,
+    "## 1. 节点信息",
+    `- 概念：${label}`,
+    `- 命中次数：${attrs.frequency ?? 0}`,
+    `- PageRank：${Number(attrs.pagerank ?? 0).toFixed(4)}`,
+    `- 社区：${attrs.community ?? 0}`,
+    mode === "related" ? "## 2. 关联节点" : "",
+    mode === "related" ? (relatedLines.length ? relatedLines.join("\n") : "- 暂无关联节点。") : "",
+    mode === "related" ? "## 3. 关联内容摘要" : "## 2. 内容摘要",
+    sentences.length
+      ? sentences.map((sentence) => `- ${sentence}`).join("\n")
+      : "- 当前项目文档中没有提取到足够的相关句子。建议重新构建图谱或扩大文档内容。",
+    mode === "related" ? "## 4. 使用建议" : "## 3. 使用建议",
+    mode === "related"
+      ? "- 可从关联节点切入，查看这些概念在同一主题簇中的共同上下文。"
+      : "- 可查看“关联性摘要”，理解该概念和相邻概念之间的上下文关系。"
+  ].filter(Boolean).join("\n\n");
+
+  return {
+    title: label,
+    subtitle: mode === "related" ? "节点关联性摘要" : "节点摘要",
+    markdown
+  };
 }
 
 function parseProjectDocuments(sourceText: string): ParsedDocument[] {
@@ -280,6 +322,8 @@ export default function App() {
   const [bottomPanelHeight, setBottomPanelHeight] = useState(288);
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
+  const [summaryDrawer, setSummaryDrawer] = useState<SummaryDrawerState | null>(null);
+  const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState>(null);
   const [summaries, setSummaries] = useState<Record<string, string>>(() => {
     const raw = localStorage.getItem("brain-graph:project-summaries");
     if (!raw) return {};
@@ -353,6 +397,10 @@ export default function App() {
     setStatus(`${attrs.label}: frequency ${attrs.frequency}, pagerank ${attrs.pagerank.toFixed(3)}. Neighbors: ${neighbors || "none"}.`);
   }, [currentGraph]);
 
+  const openNodeContextMenu = useCallback((nodeId: string, position: { x: number; y: number }) => {
+    setNodeContextMenu({ nodeId, x: position.x, y: position.y });
+  }, []);
+
   // Graph Rendering
   useEffect(() => {
     if (!containerRef.current) return;
@@ -366,7 +414,7 @@ export default function App() {
     applyGraphVisualEncoding(currentGraph.graph, currentGraph.nodes, currentGraph.edges, colorMode);
 
     if (viewMode === "2d") {
-      renderer2dRef.current = render2DGraph(currentGraph, containerRef.current, selectNode);
+      renderer2dRef.current = render2DGraph(currentGraph, containerRef.current, selectNode, openNodeContextMenu);
       return () => {
         renderer2dRef.current?.destroy();
         renderer2dRef.current = null;
@@ -376,7 +424,7 @@ export default function App() {
     void render3DGraph(currentGraph, containerRef.current, colorMode, (nodeId) => {
       const attrs = currentGraph.graph.getNodeAttributes(nodeId);
       setStatus(`${attrs.label}: frequency ${attrs.frequency}, pagerank ${attrs.pagerank.toFixed(3)}`);
-    }).then(r => {
+    }, openNodeContextMenu).then(r => {
       rendererRef.current = r;
     });
 
@@ -384,7 +432,7 @@ export default function App() {
       rendererRef.current?.destroy();
       rendererRef.current = null;
     };
-  }, [currentGraph, viewMode, colorMode, selectNode]);
+  }, [currentGraph, viewMode, colorMode, selectNode, openNodeContextMenu]);
 
   // --- Actions ---
 
@@ -471,10 +519,16 @@ export default function App() {
     setProjectMenuId(null);
     if (mode === "graph") {
       setIsSummaryDrawerOpen(false);
+      setSummaryDrawer(null);
       return;
     }
 
     setIsSummaryDrawerOpen(true);
+    setSummaryDrawer({
+      title: project.name,
+      subtitle: "项目文档综合摘要",
+      markdown: summaries[project.id] || "## 暂无摘要\n\n请先在项目菜单中点击“增量构建图谱”或“重新构建图谱”，摘要会在图谱构建完成后自动生成。"
+    });
     if (summaries[project.id]) return;
 
     try {
@@ -486,11 +540,35 @@ export default function App() {
 
       const input = await buildProjectGraphInput(project.path);
       setCurrentGraph(graph);
-      saveSummaries({ ...summaries, [project.id]: createProjectSummary(project, graph, input.text) });
+      const markdown = createProjectSummary(project, graph, input.text);
+      saveSummaries({ ...summaries, [project.id]: markdown });
+      setSummaryDrawer({ title: project.name, subtitle: "项目文档综合摘要", markdown });
     } catch (error) {
       setStatus(`Summary failed: ${error}`);
     } finally {
       setIsInitialLoading(false);
+    }
+  };
+
+  const showNodeSummary = async (nodeId: string, mode: "node" | "related") => {
+    const project = projects.find(p => p.id === selectedProjectId);
+    if (!project || !currentGraph) return;
+    setNodeContextMenu(null);
+    setIsSummaryDrawerOpen(true);
+    setSummaryDrawer({
+      title: "生成摘要中",
+      subtitle: mode === "related" ? "节点关联性摘要" : "节点摘要",
+      markdown: "## 正在读取项目 Markdown\n\n请稍候。"
+    });
+    try {
+      const input = await buildProjectGraphInput(project.path);
+      setSummaryDrawer(createNodeSummary(currentGraph, nodeId, input.text, mode));
+    } catch (error) {
+      setSummaryDrawer({
+        title: "摘要生成失败",
+        subtitle: mode === "related" ? "节点关联性摘要" : "节点摘要",
+        markdown: `## 摘要生成失败\n\n${String(error)}`
+      });
     }
   };
 
@@ -557,6 +635,8 @@ export default function App() {
   }, [bottomPanelHeight]);
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
+  const totalDocuments = projects.reduce((sum, project) => sum + project.documents.length, 0);
+  const selectedDocumentCount = selectedProject?.documents.length ?? 0;
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground font-sans">
       {/* Sidebar */}
@@ -657,6 +737,7 @@ export default function App() {
               </div>
             ))}
           </div>
+
         </ScrollArea>
 
         <div className="p-4 border-t bg-muted/20">
@@ -759,8 +840,29 @@ export default function App() {
         </header>
 
         {/* Graph Workspace */}
-        <div className="flex-1 relative overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+        <div className="flex-1 relative overflow-hidden bg-zinc-50 dark:bg-zinc-950" onClick={() => setNodeContextMenu(null)}>
           <div ref={containerRef} className="absolute inset-0" />
+
+          {nodeContextMenu && (
+            <div
+              className="fixed z-50 w-40 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl"
+              style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted"
+                onClick={() => void showNodeSummary(nodeContextMenu.nodeId, "node")}
+              >
+                显示摘要
+              </button>
+              <button
+                className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted"
+                onClick={() => void showNodeSummary(nodeContextMenu.nodeId, "related")}
+              >
+                关联性摘要
+              </button>
+            </div>
+          )}
 
           {!currentGraph && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground p-12 text-center">
@@ -820,10 +922,32 @@ export default function App() {
 
         {/* Bottom Section */}
         <section
-          className="shrink-0 grid grid-cols-2 divide-x bg-muted/10"
+          className="shrink-0 grid grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)] divide-x bg-muted/10"
           style={{ height: bottomPanelHeight }}
         >
-          <div className="flex flex-col p-6 overflow-hidden">
+          <div className="flex flex-col p-3 overflow-hidden">
+            <div className="flex items-center gap-2 mb-4">
+              <Database size={14} className="text-emerald-500" />
+              <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">统计</h3>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border bg-background/70 p-3 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">节点</div>
+                <div className="mt-1 text-xl font-semibold tabular-nums">{currentGraph?.nodes.length ?? 0}</div>
+              </div>
+              <div className="rounded-lg border bg-background/70 p-3 shadow-sm">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">关系</div>
+                <div className="mt-1 text-xl font-semibold tabular-nums">{currentGraph?.edges.length ?? 0}</div>
+              </div>
+            </div>
+            <div className="mt-3 rounded-lg border bg-background/70 p-3 shadow-sm">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">当前项目</div>
+              <div className="mt-1 truncate text-sm font-medium">{selectedProject?.name || "未选择"}</div>
+              <div className="mt-2 text-xs text-muted-foreground">{selectedDocumentCount} docs</div>
+            </div>
+          </div>
+
+          <div className="flex flex-col p-3 overflow-hidden">
             <div className="flex items-center gap-2 mb-4">
               <Lightbulb size={14} className="text-amber-500" />
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("insights")}</h3>
@@ -848,7 +972,7 @@ export default function App() {
             </ScrollArea>
           </div>
 
-          <div className="flex flex-col p-6 overflow-hidden">
+          <div className="flex flex-col p-3 overflow-hidden">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 size={14} className="text-blue-500" />
               <h3 className="text-[14px] uppercase tracking-widest font-bold text-muted-foreground">{t("topTerms")}</h3>
@@ -923,16 +1047,19 @@ export default function App() {
           >
             <div className="flex h-16 shrink-0 items-center justify-between border-b px-6">
               <div className="min-w-0">
-                <h2 className="truncate text-base font-semibold">{selectedProject.name}</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">项目文档综合摘要</p>
+                <h2 className="truncate text-base font-semibold">{summaryDrawer?.title || selectedProject.name}</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">{summaryDrawer?.subtitle || "项目文档综合摘要"}</p>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setIsSummaryDrawerOpen(false)} aria-label="关闭摘要">
+              <Button variant="ghost" size="icon" onClick={() => {
+                setIsSummaryDrawerOpen(false);
+                setSummaryDrawer(null);
+              }} aria-label="关闭摘要">
                 <X size={18} />
               </Button>
             </div>
             <ScrollArea className="flex-1">
               <div className="p-6">
-                <MarkdownPreview markdown={summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“增量构建图谱”或“重新构建图谱”，摘要会在图谱构建完成后自动生成。"} />
+                <MarkdownPreview markdown={summaryDrawer?.markdown || summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“增量构建图谱”或“重新构建图谱”，摘要会在图谱构建完成后自动生成。"} />
               </div>
             </ScrollArea>
           </div>
