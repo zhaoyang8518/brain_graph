@@ -4,38 +4,37 @@
 
 ---
 
-**AnshuDoc: A local-first, knowledge-graph-powered document intelligence platform.**
+**Transform fragmented documents into structured concept networks to power deep reading and content creation.**
 
-AnshuDoc transforms fragmented documents into a structured, interlinked network of concepts. It doesn't just store information; it **compiles** it. By integrating graph theory (PageRank, Community Detection) with modern LLMs, it reveals the "hidden architecture" of your projects, research, and data.
+AnshuDoc is a local-first document intelligence tool that combines Knowledge Graphs and Vector Search to help users navigate and understand large document sets. It utilizes graph algorithms (e.g., PageRank, Community Detection) to reveal hidden connections and automatically generates structured presentation outlines.
 
-### 🎯 The Philosophy
-*   **Knowledge Compounding**: Unlike traditional RAG that rediscovers knowledge on every query, AnshuDoc maintains a persistent, evolving wiki-layer.
-*   **Graph-First Architecture**: The graph is the core index, enabling structural insights that flat text search can't provide.
-*   **Local-First & Private**: Full control over your data. Optimized for local LLMs like Ollama.
+### 🎯 Design Philosophy
+*   **Persistent Knowledge Layer**: Unlike traditional single-query RAG, AnshuDoc maintains a cross-document network of entities and relationships to build a long-term knowledge structure.
+*   **Graph-Augmented Generation (GraphRAG)**: Leverages graph topology to provide the LLM with better context, improving the accuracy of complex reasoning tasks.
+*   **Privacy & Local-First**: Data is stored in a local SQLite database. Native support for local LLMs via Ollama ensures your data stays private.
 
 ### ✨ Key Features
-*   **Smart Ingestion**: Support for PDF, Markdown, and Office formats, automatically preserving document hierarchy for better LLM context.
-*   **Structural Intelligence**: 
-    *   **Community Detection**: Auto-detects topic clusters.
-    *   **Graph Algorithms**: Built-in PageRank and Bridge Score to find influencers and connectors.
-*   **LLM Synergy**:
-    *   **Project Summaries**: Hierarchical MD summaries derived from the graph topology.
-    *   **GraphRAG (Coming Soon)**: Multi-hop reasoning across your documents.
-    *   **Mindmap Export**: Convert graph branches into Mermaid/Markdown mindmaps.
-*   **Immersive Workspace**: 
-    *   **Hybrid View**: Seamless switching between 2D clarity and 3D panoramic exploration.
-    *   **Pro UI**: Resizable layouts, theme-aware Shadcn components, and smooth 60fps rendering.
+*   **Multi-format Sidecar Parsing**: Integrated with the `MarkItDown` engine to reliably convert PDF, Word, Excel, and PowerPoint files into clean Markdown.
+*   **Hybrid Retrieval Architecture**:
+    *   **Graph Indexing**: Automated entity extraction, PageRank-based importance scoring, and community-based topic clustering.
+    *   **Semantic Search**: Built-in vector retrieval compatible with local (ONNX) and cloud embedding models.
+*   **SlideAgent Generation**: Automatically extracts sub-graphs and evidence from the knowledge network to generate hierarchical PPT outlines based on user requirements.
+*   **Interactive Visualization**: 2D and 3D force-directed graphs for intuitive exploration of concept connections.
 
 ### 🚀 Quick Start
 1.  **Prerequisites**:
-    *   Ensure Rust, Node.js, and pnpm are installed.
+    *   Install Rust, Node.js (pnpm), and Python 3.12.
 2.  **Clone & Install**:
     ```bash
-    git clone https://github.com/Anshusoft-Grove/anshu-doc.git anshu_doc
+    git clone https://github.com/Anshusoft-Grove/anshu_doc.git
     cd anshu_doc
     pnpm install
     ```
-3.  **Run**:
+3.  **Build Parsing Engine (Sidecar)**:
+    ```bash
+    pnpm sidecar:markitdown
+    ```
+4.  **Run**:
     ```bash
     pnpm tauri dev
     ```
@@ -43,10 +42,11 @@ AnshuDoc transforms fragmented documents into a structured, interlinked network 
 ---
 
 ## 🛠️ Technology Stack
-*   **Core**: Tauri (Rust Backend)
-*   **UI**: React + Vite + Shadcn/ui + Tailwind CSS v4
-*   **Graph**: `3d-force-graph` & `graphology`
-*   **Parsing**: `unpdf`, `calamine`, `quick-xml`
+*   **Backend**: Tauri v2 (Rust) + SQLite
+*   **Frontend**: React + Vite + Shadcn/ui + Tailwind CSS v4
+*   **Visualization**: `3d-force-graph` + `graphology`
+*   **Parsing**: Microsoft MarkItDown (Python Sidecar)
+*   **AI Models**: Ollama, DeepSeek, Gemini, MiniMax
 
 ## 📄 License
 This project is licensed under the MIT License.
