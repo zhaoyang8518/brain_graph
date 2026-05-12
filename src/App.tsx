@@ -506,7 +506,7 @@ export default function App() {
     try {
       const result = await testModelConnection(modelSettings);
       setAvailableModels(result.models);
-      if (result.models.length && !modelSettings.model) {
+      if (result.models.length && !result.models.includes(modelSettings.model)) {
         setModelSettings({ ...modelSettings, model: result.models[0] });
       }
       setModelTestState({ loading: false, ok: result.ok, message: result.message });
@@ -982,48 +982,23 @@ export default function App() {
               </div>
 
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">{t("provider")}</label>
-                    <Select value={modelSettings.provider} onValueChange={(val: ModelProvider) => setModelSettings({ ...modelSettings, provider: val })}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ollama">Ollama</SelectItem>
-                        <SelectItem value="deepseek">DeepSeek</SelectItem>
-                        <SelectItem value="gemini">Google Gemini</SelectItem>
-                        <SelectItem value="minimax">MiniMax</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">{t("modelName")}</label>
-                    <Select value={modelSettings.model} onValueChange={(value) => setModelSettings({ ...modelSettings, model: value })}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableModels.map((model) => (
-                          <SelectItem key={model} value={model}>{model}</SelectItem>
-                        ))}
-                        {modelSettings.model && !availableModels.includes(modelSettings.model) && (
-                          <SelectItem value={modelSettings.model}>{modelSettings.model}</SelectItem>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Custom Model Name</label>
-                  <input
-                    type="text"
-                    value={modelSettings.model}
-                    onChange={(e) => setModelSettings({ ...modelSettings, model: e.target.value })}
-                    placeholder="Enter a model name manually"
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                  />
+                  <label className="text-sm font-medium">{t("provider")}</label>
+                  <Select value={modelSettings.provider} onValueChange={(val: ModelProvider) => {
+                    setModelSettings({ ...modelSettings, provider: val, model: "" });
+                    setAvailableModels([]);
+                    setModelTestState({ loading: false, message: "" });
+                  }}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ollama">Ollama</SelectItem>
+                      <SelectItem value="deepseek">DeepSeek</SelectItem>
+                      <SelectItem value="gemini">Google Gemini</SelectItem>
+                      <SelectItem value="minimax">MiniMax</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
@@ -1031,7 +1006,11 @@ export default function App() {
                   <input
                     type="text"
                     value={modelSettings.baseUrl}
-                    onChange={(e) => setModelSettings({ ...modelSettings, baseUrl: e.target.value })}
+                    onChange={(e) => {
+                      setModelSettings({ ...modelSettings, baseUrl: e.target.value, model: "" });
+                      setAvailableModels([]);
+                      setModelTestState({ loading: false, message: "" });
+                    }}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   />
                 </div>
@@ -1041,7 +1020,11 @@ export default function App() {
                   <input
                     type="password"
                     value={modelSettings.apiKey}
-                    onChange={(e) => setModelSettings({ ...modelSettings, apiKey: e.target.value })}
+                    onChange={(e) => {
+                      setModelSettings({ ...modelSettings, apiKey: e.target.value, model: "" });
+                      setAvailableModels([]);
+                      setModelTestState({ loading: false, message: "" });
+                    }}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   />
                 </div>
@@ -1053,7 +1036,7 @@ export default function App() {
                     onClick={handleTestModelConnection}
                     disabled={modelTestState.loading}
                   >
-                    {modelTestState.loading ? "Testing..." : "测试连接并读取模型"}
+                    {modelTestState.loading ? "Testing..." : "测试连接"}
                   </Button>
                   {modelTestState.message && (
                     <span className={cn(
@@ -1063,6 +1046,31 @@ export default function App() {
                       {modelTestState.message}
                     </span>
                   )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t("modelName")}</label>
+                  <Select value={modelSettings.model} onValueChange={(value) => setModelSettings({ ...modelSettings, model: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableModels.map((model) => (
+                        <SelectItem key={model} value={model}>{model}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Custom Model Name</label>
+                  <input
+                    type="text"
+                    value={modelSettings.model}
+                    onChange={(e) => setModelSettings({ ...modelSettings, model: e.target.value })}
+                    placeholder="Enter a model name manually"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  />
                 </div>
               </div>
             </TabsContent>
