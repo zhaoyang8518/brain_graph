@@ -107,6 +107,42 @@ struct ProjectBuildDocument {
     size: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SlideOutlineRequest {
+    project_path: String,
+    question: String,
+    audience: String,
+    slide_count: usize,
+    language: String,
+    settings: ModelSettings,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct StoredGraphNode {
+    id: String,
+    label: String,
+    kind: String,
+    frequency: u32,
+    pagerank: f64,
+    bridge_score: f64,
+    community: i32,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct StoredGraphEdge {
+    source: String,
+    target: String,
+    weight: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredGraph {
+    nodes: Vec<StoredGraphNode>,
+    edges: Vec<StoredGraphEdge>,
+}
+
 #[tauri::command]
 async fn extract_concepts(
     text: String,
@@ -150,6 +186,43 @@ async fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectio
                 models,
             })
         }
+    }
+}
+
+#[tauri::command]
+async fn generate_slide_outline(request: SlideOutlineRequest) -> Result<Value, String> {
+    let graph_json = load_project_graph(request.project_path.clone())
+        .await?
+        .ok_or_else(|| {
+            "No saved graph found for this project. Build the graph first.".to_string()
+        })?;
+    let graph: StoredGraph = serde_json::from_str(&graph_json)
+        .map_err(|err| format!("Failed to parse saved graph: {}", err))?;
+    let input = build_project_graph_input(request.project_path.clone(), Some(false)).await?;
+    let context = make_slide_outline_context(&graph, &input, &request);
+    let prompt = make_slide_outline_prompt(&context, &request);
+    match complete_json_with_model(&prompt, &request.settings).await {
+        Ok(outline) => {
+            if let Some(normalized) = normalize_slide_outline(outline.clone(), &request) {
+                return Ok(normalized);
+            }
+            let repair_prompt = make_slide_outline_repair_prompt(&outline, &context, &request);
+            match complete_json_with_model(&repair_prompt, &request.settings).await {
+                Ok(repaired) => {
+                    if let Some(normalized) = normalize_slide_outline(repaired, &request) {
+                        Ok(normalized)
+                    } else {
+                        Ok(make_fallback_slide_outline(
+                            &context,
+                            &request,
+                            "Model returned JSON twice, but neither response matched the slide outline schema.",
+                        ))
+                    }
+                }
+                Err(error) => Ok(make_fallback_slide_outline(&context, &request, &error)),
+            }
+        }
+        Err(error) => Ok(make_fallback_slide_outline(&context, &request, &error)),
     }
 }
 
@@ -304,6 +377,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             extract_concepts,
             test_model_connection,
+            generate_slide_outline,
             open_project_folder,
             scan_project_documents,
             build_project_graph_input,
@@ -752,6 +826,378 @@ Text:
     )
 }
 
+fn make_slide_outline_context(
+    graph: &StoredGraph,
+    input: &ProjectGraphInput,
+    request: &SlideOutlineRequest,
+) -> Value {
+    let query = request.question.to_lowercase();
+    let mut scored_nodes = graph.nodes.clone();
+    scored_nodes.sort_by(|left, right| {
+        let left_match = if query.contains(&left.label.to_lowercase())
+            || query.contains(&left.id.to_lowercase())
+        {
+            10.0
+        } else {
+            0.0
+        };
+        let right_match = if query.contains(&right.label.to_lowercase())
+            || query.contains(&right.id.to_lowercase())
+        {
+            10.0
+        } else {
+            0.0
+        };
+        let left_score = left_match + left.pagerank * 100.0 + (left.frequency as f64).ln_1p();
+        let right_score = right_match + right.pagerank * 100.0 + (right.frequency as f64).ln_1p();
+        right_score
+            .partial_cmp(&left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let seed_nodes: Vec<StoredGraphNode> = scored_nodes.into_iter().take(16).collect();
+    let seed_ids: std::collections::HashSet<String> =
+        seed_nodes.iter().map(|node| node.id.clone()).collect();
+    let sub_edges: Vec<StoredGraphEdge> = graph
+        .edges
+        .iter()
+        .filter(|edge| seed_ids.contains(&edge.source) || seed_ids.contains(&edge.target))
+        .take(80)
+        .cloned()
+        .collect();
+    let mut sub_node_ids = seed_ids;
+    for edge in &sub_edges {
+        sub_node_ids.insert(edge.source.clone());
+        sub_node_ids.insert(edge.target.clone());
+    }
+    let sub_nodes: Vec<&StoredGraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|node| sub_node_ids.contains(&node.id))
+        .take(48)
+        .collect();
+    let keywords: Vec<String> = seed_nodes
+        .iter()
+        .take(12)
+        .map(|node| node.label.to_lowercase())
+        .collect();
+    let mut evidence = Vec::new();
+    for chunk in &input.chunks {
+        let lower = chunk.text.to_lowercase();
+        let hits: Vec<String> = keywords
+            .iter()
+            .filter(|keyword| lower.contains(keyword.as_str()))
+            .take(4)
+            .cloned()
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        evidence.push(json!({
+            "document": chunk.document_name,
+            "chunkIndex": chunk.index,
+            "concepts": hits,
+            "text": limit_text(chunk.text.clone(), 900)
+        }));
+        if evidence.len() >= 12 {
+            break;
+        }
+    }
+
+    json!({
+        "question": request.question,
+        "audience": request.audience,
+        "slideCount": request.slide_count,
+        "language": request.language,
+        "graphSummary": {
+            "nodes": graph.nodes.len(),
+            "edges": graph.edges.len(),
+            "topConcepts": seed_nodes.iter().take(12).map(|node| node.label.clone()).collect::<Vec<_>>()
+        },
+        "subgraph": {
+            "nodes": sub_nodes.iter().map(|node| json!({
+                "id": node.id,
+                "label": node.label,
+                "kind": node.kind,
+                "frequency": node.frequency,
+                "pagerank": node.pagerank,
+                "community": node.community
+            })).collect::<Vec<_>>(),
+            "edges": sub_edges.iter().map(|edge| json!({
+                "source": edge.source,
+                "target": edge.target,
+                "weight": edge.weight
+            })).collect::<Vec<_>>()
+        },
+        "evidence": evidence
+    })
+}
+
+fn make_slide_outline_prompt(context: &Value, request: &SlideOutlineRequest) -> String {
+    format!(
+        r#"You are a senior presentation strategist. Generate a slide outline from a project knowledge graph.
+
+Return JSON only with this exact shape:
+{{
+  "title": "deck title",
+  "audience": "target audience",
+  "goal": "deck goal",
+  "language": "zh or en",
+  "slides": [
+    {{
+      "index": 1,
+      "title": "slide title",
+      "purpose": "why this slide exists",
+      "bullets": ["short point"],
+      "visual": {{"type": "chart/table/diagram/summary_cards/network", "reason": "why"}},
+      "evidence": [{{"source": "document name", "concepts": ["concept"], "quote": "short supporting quote"}}],
+      "speakerNotes": "brief talk track"
+    }}
+  ]
+}}
+
+Rules:
+- Create about {} slides.
+- Write for audience: {}.
+- Answer the user's question directly.
+- Use evidence from the context. Do not invent facts.
+- Make slide titles specific and decision-oriented.
+- Keep bullets concise.
+- The root JSON object MUST contain "title", "audience", "goal", "language", and "slides".
+- The "slides" field MUST be an array with slide objects.
+- Do not return graph nodes, entity records, translated field names, markdown, or explanations.
+- Keep JSON property names exactly in English as shown in the schema.
+
+Context JSON:
+{}"#,
+        request.slide_count,
+        request.audience,
+        serde_json::to_string(context).unwrap_or_else(|_| "{}".to_string())
+    )
+}
+
+fn make_slide_outline_repair_prompt(
+    invalid_json: &Value,
+    context: &Value,
+    request: &SlideOutlineRequest,
+) -> String {
+    format!(
+        r#"The previous response is valid JSON but it is NOT a slide outline.
+
+Rewrite it into a slide outline JSON. Do not return graph nodes or edges.
+
+Required root schema:
+{{
+  "title": "deck title",
+  "audience": "{}",
+  "goal": "deck goal",
+  "language": "{}",
+  "slides": [
+    {{
+      "index": 1,
+      "title": "slide title",
+      "purpose": "why this slide exists",
+      "bullets": ["short point"],
+      "visual": {{"type": "summary_cards", "reason": "why"}},
+      "evidence": [],
+      "speakerNotes": "brief talk track"
+    }}
+  ]
+}}
+
+Create about {} slides. Answer this user question:
+{}
+
+Invalid JSON returned by the model:
+{}
+
+Context:
+{}"#,
+        request.audience,
+        request.language,
+        request.slide_count,
+        request.question,
+        limit_text(invalid_json.to_string(), 1800),
+        serde_json::to_string(context).unwrap_or_else(|_| "{}".to_string())
+    )
+}
+
+fn is_valid_slide_outline(value: &Value) -> bool {
+    let Some(slides) = value.get("slides").and_then(Value::as_array) else {
+        return false;
+    };
+    if slides.is_empty() {
+        return false;
+    }
+    slides.iter().all(|slide| {
+        slide.get("title").and_then(Value::as_str).is_some()
+            && slide.get("bullets").and_then(Value::as_array).is_some()
+    })
+}
+
+fn normalize_slide_outline(value: Value, request: &SlideOutlineRequest) -> Option<Value> {
+    let candidate = unwrap_slide_outline_candidate(&value);
+    if is_valid_slide_outline(candidate) {
+        return Some(complete_slide_outline_defaults(candidate.clone(), request));
+    }
+
+    if let Some(slides) = candidate.get("slides").and_then(Value::as_array) {
+        let normalized_slides: Vec<Value> = slides
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slide)| normalize_slide_item(slide, index + 1))
+            .collect();
+        if !normalized_slides.is_empty() {
+            return Some(json!({
+                "title": candidate.get("title").and_then(Value::as_str).unwrap_or("幻灯片大纲"),
+                "audience": candidate.get("audience").and_then(Value::as_str).unwrap_or(&request.audience),
+                "goal": candidate.get("goal").and_then(Value::as_str).unwrap_or("基于项目知识图谱生成汇报大纲"),
+                "language": candidate.get("language").and_then(Value::as_str).unwrap_or(&request.language),
+                "slides": normalized_slides
+            }));
+        }
+    }
+
+    None
+}
+
+fn unwrap_slide_outline_candidate(value: &Value) -> &Value {
+    for key in ["slides", "title"] {
+        if value.get(key).is_some() {
+            return value;
+        }
+    }
+    for key in ["response", "outline", "deck", "result", "data"] {
+        if let Some(inner) = value.get(key) {
+            let candidate = unwrap_slide_outline_candidate(inner);
+            if candidate.get("slides").is_some() || candidate.get("title").is_some() {
+                return candidate;
+            }
+        }
+    }
+    value
+}
+
+fn complete_slide_outline_defaults(value: Value, request: &SlideOutlineRequest) -> Value {
+    json!({
+        "title": value.get("title").and_then(Value::as_str).unwrap_or("幻灯片大纲"),
+        "audience": value.get("audience").and_then(Value::as_str).unwrap_or(&request.audience),
+        "goal": value.get("goal").and_then(Value::as_str).unwrap_or("基于项目知识图谱生成汇报大纲"),
+        "language": value.get("language").and_then(Value::as_str).unwrap_or(&request.language),
+        "slides": value.get("slides").and_then(Value::as_array).cloned().unwrap_or_default()
+    })
+}
+
+fn normalize_slide_item(slide: &Value, fallback_index: usize) -> Option<Value> {
+    let title = slide
+        .get("title")
+        .or_else(|| slide.get("标题"))
+        .or_else(|| slide.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if title.is_empty() {
+        return None;
+    }
+    let bullets = slide
+        .get("bullets")
+        .or_else(|| slide.get("要点"))
+        .or_else(|| slide.get("points"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(json!({
+        "index": slide.get("index").and_then(Value::as_u64).unwrap_or(fallback_index as u64),
+        "title": title,
+        "purpose": slide.get("purpose").or_else(|| slide.get("目的")).and_then(Value::as_str).unwrap_or("说明本页主题"),
+        "bullets": bullets,
+        "visual": slide.get("visual").cloned().unwrap_or_else(|| json!({"type": "summary_cards", "reason": "适合展示关键要点"})),
+        "evidence": slide.get("evidence").cloned().unwrap_or_else(|| json!([])),
+        "speakerNotes": slide.get("speakerNotes").or_else(|| slide.get("speaker_notes")).or_else(|| slide.get("讲稿")).and_then(Value::as_str).unwrap_or("")
+    }))
+}
+
+fn make_fallback_slide_outline(
+    context: &Value,
+    request: &SlideOutlineRequest,
+    error: &str,
+) -> Value {
+    let top_concepts: Vec<String> = context["graphSummary"]["topConcepts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .take(8)
+        .map(str::to_string)
+        .collect();
+    let evidence: Vec<Value> = context["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(6)
+        .cloned()
+        .collect();
+    let mut slides = vec![
+        json!({
+            "index": 1,
+            "title": "项目知识图谱概览",
+            "purpose": "建立听众对项目主题和图谱规模的整体认知",
+            "bullets": [
+                format!("图谱包含 {} 个节点、{} 条关系。", context["graphSummary"]["nodes"].as_u64().unwrap_or(0), context["graphSummary"]["edges"].as_u64().unwrap_or(0)),
+                format!("核心概念包括：{}。", top_concepts.iter().take(5).cloned().collect::<Vec<_>>().join("、")),
+                "该大纲由本地 fallback 生成，原因是模型返回内容无法解析为 JSON。"
+            ],
+            "visual": {"type": "network", "reason": "适合展示项目核心概念及关系结构"},
+            "evidence": [],
+            "speakerNotes": "先说明图谱来源、分析范围和本次汇报目标。"
+        }),
+        json!({
+            "index": 2,
+            "title": "核心主题与关键概念",
+            "purpose": "提炼项目中最重要的主题簇",
+            "bullets": top_concepts.iter().take(6).map(|concept| format!("{} 是图谱中的高优先级概念。", concept)).collect::<Vec<_>>(),
+            "visual": {"type": "summary_cards", "reason": "适合展示多个核心主题"},
+            "evidence": evidence,
+            "speakerNotes": "围绕高频和高 PageRank 概念解释项目主线。"
+        }),
+    ];
+
+    let target = request.slide_count.clamp(3, 20);
+    while slides.len() < target {
+        let index = slides.len() + 1;
+        let concept = top_concepts
+            .get((index - 3) % top_concepts.len().max(1))
+            .cloned()
+            .unwrap_or_else(|| "关键主题".to_string());
+        slides.push(json!({
+            "index": index,
+            "title": format!("{}：证据与行动建议", concept),
+            "purpose": "围绕一个关键主题展开证据和建议",
+            "bullets": [
+                format!("梳理 {} 在项目文档中的主要上下文。", concept),
+                "结合相关节点和证据片段识别风险、机会或下一步工作。",
+                "将发现转化为可执行的管理建议。"
+            ],
+            "visual": {"type": "table", "reason": "适合组织主题、证据和建议"},
+            "evidence": [],
+            "speakerNotes": "这一页需要后续由模型或人工补充更具体的证据引用。"
+        }));
+    }
+
+    json!({
+        "title": format!("{} - 幻灯片大纲", request.question),
+        "audience": request.audience,
+        "goal": "基于项目知识图谱生成可编辑的汇报大纲",
+        "language": request.language,
+        "warning": format!("Model JSON parsing failed: {}", error),
+        "slides": slides
+    })
+}
+
 async fn extract_with_ollama(
     prompt: &str,
     settings: &ModelSettings,
@@ -954,6 +1400,122 @@ async fn extract_with_openai_compatible(
     Ok(ConceptExtractionResult {
         concepts: parse_concepts(content)?,
         provider_used: format!("{}:{}", settings.provider, settings.model),
+    })
+}
+
+async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Result<Value, String> {
+    match settings.provider.as_str() {
+        "ollama" => {
+            let url = format!("{}/api/chat", trim_slash(&settings.base_url));
+            let client = reqwest_client()?;
+            let response = client
+                .post(url)
+                .json(&json!({
+                    "model": settings.model,
+                    "stream": false,
+                    "format": "json",
+                    "messages": [{"role": "user", "content": prompt}]
+                }))
+                .send()
+                .await
+                .map_err(|err| request_error_message("ollama", err))?;
+            if !response.status().is_success() {
+                return Err(format!("Ollama returned {}", response.status()));
+            }
+            let data: Value = response.json().await.map_err(|err| err.to_string())?;
+            let content = data["message"]["content"].as_str().unwrap_or("");
+            parse_model_json_value(content, &data)
+        }
+        "gemini" => {
+            let model = if settings.model.is_empty() {
+                "gemini-2.5-flash"
+            } else {
+                settings.model.as_str()
+            };
+            let base_url = if settings.base_url.is_empty() {
+                "https://generativelanguage.googleapis.com/v1beta"
+            } else {
+                settings.base_url.as_str()
+            };
+            let url = format!(
+                "{}/models/{}:generateContent?key={}",
+                trim_slash(base_url),
+                model,
+                settings.api_key
+            );
+            let client = reqwest_client()?;
+            let response = client
+                .post(url)
+                .json(&json!({
+                    "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+                    "contents": [{"parts": [{"text": prompt}]}]
+                }))
+                .send()
+                .await
+                .map_err(|err| request_error_message("gemini", err))?;
+            if !response.status().is_success() {
+                return Err(format!("Gemini returned {}", response.status()));
+            }
+            let data: Value = response.json().await.map_err(|err| err.to_string())?;
+            let content = data["candidates"][0]["content"]["parts"][0]["text"]
+                .as_str()
+                .unwrap_or("");
+            parse_model_json_value(content, &data)
+        }
+        _ => {
+            let base_url = if settings.base_url.is_empty() {
+                match settings.provider.as_str() {
+                    "deepseek" => "https://api.deepseek.com",
+                    "minimax" => "https://api.minimax.io/v1",
+                    _ => "",
+                }
+            } else {
+                settings.base_url.as_str()
+            };
+            let url = format!("{}/chat/completions", trim_slash(base_url));
+            let client = reqwest_client()?;
+            let response = client
+                .post(url)
+                .bearer_auth(&settings.api_key)
+                .json(&json!({
+                    "model": settings.model,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                    "messages": [{"role": "user", "content": prompt}]
+                }))
+                .send()
+                .await
+                .map_err(|err| request_error_message(&settings.provider, err))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "{} returned {}",
+                    settings.provider,
+                    response.status()
+                ));
+            }
+            let data: Value = response.json().await.map_err(|err| err.to_string())?;
+            let content = data["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("");
+            parse_model_json_value(content, &data)
+        }
+    }
+}
+
+fn parse_model_json_value(content: &str, response_data: &Value) -> Result<Value, String> {
+    let cleaned = clean_model_json_text(content);
+    if cleaned.trim().is_empty() {
+        return Err(format!(
+            "Model returned empty content. Raw response excerpt: {}",
+            limit_text(response_data.to_string(), 600)
+        ));
+    }
+    serde_json::from_str(&cleaned).map_err(|err| {
+        format!(
+            "Model returned non-JSON content: {}. Content excerpt: {}",
+            err,
+            limit_text(content.to_string(), 600)
+        )
     })
 }
 

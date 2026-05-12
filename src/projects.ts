@@ -43,6 +43,15 @@ export type BuildGraphInputOptions = {
   rebuild?: boolean;
 };
 
+export type SlideOutlineRequest = {
+  projectPath: string;
+  question: string;
+  audience: string;
+  slideCount: number;
+  language: string;
+  settings: any;
+};
+
 const PROJECTS_KEY = "brain-graph:projects";
 
 export function loadProjects(): ProjectInfo[] {
@@ -93,6 +102,13 @@ export async function loadProjectGraph(projectPath: string): Promise<string | nu
     return invoke<string | null>("load_project_graph", { projectPath });
   }
   return localStorage.getItem(`brain-graph:project-graph:${projectPath}`);
+}
+
+export async function generateSlideOutline(request: SlideOutlineRequest): Promise<any> {
+  if (isTauriRuntime()) {
+    return invoke<any>("generate_slide_outline", { request });
+  }
+  throw new Error("Slide outline generation is available in the Tauri desktop app.");
 }
 
 function isTauriRuntime(): boolean {

@@ -39,6 +39,7 @@ import {
   saveProjectGraph,
   refreshProject,
   buildProjectGraphInput,
+  generateSlideOutline,
   type ProjectInfo
 } from "./projects";
 import {
@@ -76,6 +77,7 @@ type ProjectContentMode = "graph" | "summary";
 type BuildProgressState = { percent: number; message: string; details?: string[] };
 type NodeContextMenuState = { nodeId: string; x: number; y: number } | null;
 type SummaryDrawerState = { title: string; subtitle: string; markdown: string };
+type SlideOutlineForm = { question: string; audience: string; slideCount: number; language: string };
 
 type ParsedDocument = {
   name: string;
@@ -170,6 +172,23 @@ function createNodeSummary(
     subtitle: mode === "related" ? "节点关联性摘要" : "节点摘要",
     markdown
   };
+}
+
+function slideOutlineToMarkdown(outline: any): string {
+  const slides = Array.isArray(outline?.slides) ? outline.slides : [];
+  return [
+    `# ${outline?.title || "幻灯片大纲"}`,
+    `- 受众：${outline?.audience || ""}`,
+    `- 目标：${outline?.goal || ""}`,
+    "## 页面大纲",
+    slides.map((slide: any, index: number) => [
+      `### ${slide.index || index + 1}. ${slide.title || "Untitled"}`,
+      slide.purpose ? `- 目的：${slide.purpose}` : "",
+      ...(Array.isArray(slide.bullets) ? slide.bullets.map((item: string) => `- ${item}`) : []),
+      slide.visual?.type ? `- 建议视觉：${slide.visual.type}，${slide.visual.reason || ""}` : "",
+      slide.speakerNotes ? `- 讲稿提示：${slide.speakerNotes}` : ""
+    ].filter(Boolean).join("\n")).join("\n\n")
+  ].join("\n\n");
 }
 
 function parseProjectDocuments(sourceText: string): ParsedDocument[] {
@@ -320,10 +339,20 @@ export default function App() {
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(288);
+  const [summaryDrawerWidth, setSummaryDrawerWidth] = useState(() => Math.round(window.innerWidth / 3));
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
   const [isSummaryDrawerOpen, setIsSummaryDrawerOpen] = useState(false);
   const [summaryDrawer, setSummaryDrawer] = useState<SummaryDrawerState | null>(null);
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuState>(null);
+  const [isSlideOutlineComposerOpen, setIsSlideOutlineComposerOpen] = useState(false);
+  const [slideOutlineForm, setSlideOutlineForm] = useState<SlideOutlineForm>({
+    question: "",
+    audience: "管理层",
+    slideCount: 8,
+    language: "zh"
+  });
+  const [slideOutlineJson, setSlideOutlineJson] = useState<any>(null);
+  const [isGeneratingSlideOutline, setIsGeneratingSlideOutline] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, string>>(() => {
     const raw = localStorage.getItem("brain-graph:project-summaries");
     if (!raw) return {};
@@ -572,6 +601,54 @@ export default function App() {
     }
   };
 
+  const openSlideOutlineComposer = (project: ProjectInfo) => {
+    setSelectedProjectId(project.id);
+    setProjectMenuId(null);
+    setIsSummaryDrawerOpen(true);
+    setIsSlideOutlineComposerOpen(true);
+    setSlideOutlineJson(null);
+    setSummaryDrawer({
+      title: "生成幻灯片大纲",
+      subtitle: project.name,
+      markdown: "## 输入主题\n\n根据该项目的知识图谱和文档内容生成幻灯片大纲。"
+    });
+  };
+
+  const handleGenerateSlideOutline = async () => {
+    const project = projects.find(p => p.id === selectedProjectId);
+    if (!project) return;
+    setIsGeneratingSlideOutline(true);
+    setSummaryDrawer({
+      title: "生成幻灯片大纲",
+      subtitle: project.name,
+      markdown: "## 正在生成\n\n正在抽取相关子图、检索证据，并调用当前模型生成结构化大纲。"
+    });
+    try {
+      const outline = await generateSlideOutline({
+        projectPath: project.path,
+        question: slideOutlineForm.question,
+        audience: slideOutlineForm.audience,
+        slideCount: slideOutlineForm.slideCount,
+        language: slideOutlineForm.language,
+        settings: modelSettings
+      });
+      setSlideOutlineJson(outline);
+      setSummaryDrawer({
+        title: outline?.title || "幻灯片大纲",
+        subtitle: `${project.name} · ${slideOutlineForm.audience}`,
+        markdown: slideOutlineToMarkdown(outline)
+      });
+    } catch (error) {
+      setSummaryDrawer({
+        title: "生成失败",
+        subtitle: project.name,
+        markdown: `## 幻灯片大纲生成失败\n\n${String(error)}`
+      });
+    } finally {
+      setIsGeneratingSlideOutline(false);
+    }
+  };
+
   const handleSaveSettings = () => {
     saveModelSettings(modelSettings);
     saveLanguage(language);
@@ -633,6 +710,26 @@ export default function App() {
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp, { once: true });
   }, [bottomPanelHeight]);
+
+  const startSummaryDrawerResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = summaryDrawerWidth;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setSummaryDrawerWidth(clamp(startWidth + startX - moveEvent.clientX, 360, Math.max(520, window.innerWidth - sidebarWidth - 80)));
+    };
+    const handleUp = () => {
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+  }, [summaryDrawerWidth, sidebarWidth]);
 
   const selectedProject = projects.find(p => p.id === selectedProjectId);
   const totalDocuments = projects.reduce((sum, project) => sum + project.documents.length, 0);
@@ -708,6 +805,9 @@ export default function App() {
                     </button>
                     <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void handleRefreshProject(project)}>
                       刷新
+                    </button>
+                    <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => openSlideOutlineComposer(project)}>
+                      生成幻灯片大纲
                     </button>
                     <div className="my-1 h-px bg-border" />
                     <button className="w-full rounded-md px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => void showProjectContent(project, "graph")}>
@@ -1040,11 +1140,19 @@ export default function App() {
         {selectedProject && (
           <div
             className={cn(
-              "absolute bottom-0 right-0 top-16 z-30 flex w-[min(720px,calc(100%-32px))] max-w-full flex-col border-l bg-background shadow-2xl transition-transform duration-300 ease-out",
+              "absolute bottom-0 right-0 top-16 z-30 flex max-w-[calc(100%-32px)] flex-col border-l bg-background shadow-2xl transition-transform duration-300 ease-out",
               isSummaryDrawerOpen ? "translate-x-0" : "translate-x-full"
             )}
+            style={{ width: summaryDrawerWidth }}
             aria-hidden={!isSummaryDrawerOpen}
           >
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize summary drawer"
+              className="absolute left-[-4px] top-0 z-40 h-full w-2 cursor-col-resize bg-transparent transition-colors hover:bg-primary/30 active:bg-primary/40"
+              onPointerDown={startSummaryDrawerResize}
+            />
             <div className="flex h-16 shrink-0 items-center justify-between border-b px-6">
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold">{summaryDrawer?.title || selectedProject.name}</h2>
@@ -1053,12 +1161,60 @@ export default function App() {
               <Button variant="ghost" size="icon" onClick={() => {
                 setIsSummaryDrawerOpen(false);
                 setSummaryDrawer(null);
+                setIsSlideOutlineComposerOpen(false);
               }} aria-label="关闭摘要">
                 <X size={18} />
               </Button>
             </div>
             <ScrollArea className="flex-1">
-              <div className="p-6">
+              <div className="space-y-6 p-6">
+                {isSlideOutlineComposerOpen && (
+                  <div className="space-y-4 rounded-xl border bg-muted/20 p-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">主题 / 问题</label>
+                      <textarea
+                        value={slideOutlineForm.question}
+                        onChange={(event) => setSlideOutlineForm({ ...slideOutlineForm, question: event.target.value })}
+                        placeholder="例如：围绕这个项目生成一份面向管理层的风险与机会分析汇报"
+                        className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">受众</label>
+                        <input
+                          value={slideOutlineForm.audience}
+                          onChange={(event) => setSlideOutlineForm({ ...slideOutlineForm, audience: event.target.value })}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">页数</label>
+                        <input
+                          type="number"
+                          min={3}
+                          max={20}
+                          value={slideOutlineForm.slideCount}
+                          onChange={(event) => setSlideOutlineForm({ ...slideOutlineForm, slideCount: Number(event.target.value) || 8 })}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">语言</label>
+                        <Select value={slideOutlineForm.language} onValueChange={(value) => setSlideOutlineForm({ ...slideOutlineForm, language: value })}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="zh">中文</SelectItem>
+                            <SelectItem value="en">English</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <Button onClick={handleGenerateSlideOutline} disabled={isGeneratingSlideOutline || !slideOutlineForm.question.trim()}>
+                      {isGeneratingSlideOutline ? "生成中..." : "生成大纲"}
+                    </Button>
+                  </div>
+                )}
                 <MarkdownPreview markdown={summaryDrawer?.markdown || summaries[selectedProject.id] || "## 暂无摘要\n\n请先在项目菜单中点击“增量构建图谱”或“重新构建图谱”，摘要会在图谱构建完成后自动生成。"} />
               </div>
             </ScrollArea>
