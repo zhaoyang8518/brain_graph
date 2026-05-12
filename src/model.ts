@@ -20,6 +20,13 @@ export type ConceptExtractionResult = {
   providerUsed: string;
 };
 
+export type ModelConnectionResult = {
+  ok: boolean;
+  source: "provider" | "registry" | string;
+  models: string[];
+  message: string;
+};
+
 const SETTINGS_KEY = "brain-graph:model-settings";
 
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
@@ -42,6 +49,20 @@ export function loadModelSettings(): ModelSettings {
 
 export function saveModelSettings(settings: ModelSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+export async function testModelConnection(settings: ModelSettings): Promise<ModelConnectionResult> {
+  if (isTauriRuntime()) {
+    return invoke<ModelConnectionResult>("test_model_connection", { settings });
+  }
+
+  const models = fallbackModels(settings.provider);
+  return {
+    ok: false,
+    source: "registry",
+    models,
+    message: "Model connection test is available in the Tauri desktop app. Showing built-in registry models."
+  };
 }
 
 export async function extractConceptsWithModel(
@@ -181,7 +202,7 @@ async function extractWithGemini(
 }
 
 function parseConceptJson(content: string): TypedConcept[] {
-  const jsonText = content.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
+  const jsonText = cleanModelJsonText(content);
   const data = JSON.parse(jsonText);
   const concepts = Array.isArray(data) ? data : data.concepts;
   if (!Array.isArray(concepts)) throw new Error("Model response did not include concepts[]");
@@ -197,10 +218,86 @@ function parseConceptJson(content: string): TypedConcept[] {
     .slice(0, 3000);
 }
 
+function cleanModelJsonText(content: string): string {
+  const cleaned = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch {
+    // Some reasoning models return <think>...</think> before the JSON payload.
+  }
+
+  const afterThink = cleaned.split("</think>").pop()?.trim();
+  if (afterThink) {
+    try {
+      JSON.parse(afterThink);
+      return afterThink;
+    } catch {
+      // Continue with generic JSON extraction.
+    }
+  }
+
+  return extractFirstJsonValue(cleaned) ?? cleaned;
+}
+
+function extractFirstJsonValue(text: string): string | null {
+  for (let start = 0; start < text.length; start += 1) {
+    const first = text[start];
+    if (first !== "{" && first !== "[") continue;
+    const stack = [first === "{" ? "}" : "]"];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start + 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === "\"") inString = false;
+        continue;
+      }
+
+      if (char === "\"") inString = true;
+      else if (char === "{") stack.push("}");
+      else if (char === "[") stack.push("]");
+      else if (char === "}" || char === "]") {
+        if (stack.pop() !== char) break;
+        if (stack.length === 0) {
+          const candidate = text.slice(start, index + 1);
+          try {
+            JSON.parse(candidate);
+            return candidate;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function defaultBaseUrl(provider: ModelProvider): string {
   if (provider === "deepseek") return "https://api.deepseek.com";
   if (provider === "minimax") return "https://api.minimax.io/v1";
   return "";
+}
+
+function fallbackModels(provider: ModelProvider): string[] {
+  if (provider === "ollama") return ["qwen2.5:3b", "qwen2.5:7b", "llama3.2:3b", "gemma2:2b"];
+  if (provider === "deepseek") return ["deepseek-chat", "deepseek-reasoner"];
+  if (provider === "gemini") return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+  if (provider === "minimax") {
+    return [
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2",
+      "MiniMax-M2.5",
+      "MiniMax-M2.7",
+      "MiniMax-M2.1",
+      "MiniMax-M2.5-highspeed"
+    ];
+  }
+  return [];
 }
 
 function trimSlash(value: string): string {

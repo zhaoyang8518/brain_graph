@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use text_splitter::MarkdownSplitter;
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +29,15 @@ struct TypedConcept {
 struct ConceptExtractionResult {
     concepts: Vec<TypedConcept>,
     provider_used: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelConnectionResult {
+    ok: bool,
+    source: String,
+    models: Vec<String>,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +117,39 @@ async fn extract_concepts(
         "ollama" => extract_with_ollama(&prompt, &settings).await,
         "gemini" => extract_with_gemini(&prompt, &settings).await,
         _ => extract_with_openai_compatible(&prompt, &settings).await,
+    }
+}
+
+#[tauri::command]
+async fn test_model_connection(settings: ModelSettings) -> Result<ModelConnectionResult, String> {
+    match fetch_provider_models(&settings).await {
+        Ok(models) if !models.is_empty() => Ok(ModelConnectionResult {
+            ok: true,
+            source: "provider".to_string(),
+            message: format!("Connected. Found {} model(s) from provider.", models.len()),
+            models,
+        }),
+        Ok(_) => {
+            let models = fallback_models(&settings.provider);
+            Ok(ModelConnectionResult {
+                ok: true,
+                source: "registry".to_string(),
+                message: "Connected, but provider returned no model list. Showing built-in registry models.".to_string(),
+                models,
+            })
+        }
+        Err(error) => {
+            let models = fallback_models(&settings.provider);
+            Ok(ModelConnectionResult {
+                ok: false,
+                source: "registry".to_string(),
+                message: format!(
+                    "Provider model lookup failed: {}. Showing built-in registry models.",
+                    error
+                ),
+                models,
+            })
+        }
     }
 }
 
@@ -260,6 +303,7 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             extract_concepts,
+            test_model_connection,
             open_project_folder,
             scan_project_documents,
             build_project_graph_input,
@@ -713,7 +757,7 @@ async fn extract_with_ollama(
     settings: &ModelSettings,
 ) -> Result<ConceptExtractionResult, String> {
     let url = format!("{}/api/chat", trim_slash(&settings.base_url));
-    let client = reqwest::Client::new();
+    let client = reqwest_client()?;
     let response = client
         .post(url)
         .json(&json!({
@@ -738,6 +782,134 @@ async fn extract_with_ollama(
     })
 }
 
+async fn fetch_provider_models(settings: &ModelSettings) -> Result<Vec<String>, String> {
+    match settings.provider.as_str() {
+        "ollama" => fetch_ollama_models(settings).await,
+        "gemini" => fetch_gemini_models(settings).await,
+        "deepseek" | "minimax" | "custom" => fetch_openai_compatible_models(settings).await,
+        _ => Ok(Vec::new()),
+    }
+}
+
+async fn fetch_ollama_models(settings: &ModelSettings) -> Result<Vec<String>, String> {
+    let base_url = if settings.base_url.is_empty() {
+        "http://127.0.0.1:11434"
+    } else {
+        settings.base_url.as_str()
+    };
+    let url = format!("{}/api/tags", trim_slash(base_url));
+    let client = reqwest_client()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| request_error_message("ollama", err))?;
+    if !response.status().is_success() {
+        return Err(format!("ollama returned {}", response.status()));
+    }
+    let data: Value = response.json().await.map_err(|err| err.to_string())?;
+    let models = data["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["name"].as_str().map(|name| name.to_string()))
+        .collect();
+    Ok(models)
+}
+
+async fn fetch_openai_compatible_models(settings: &ModelSettings) -> Result<Vec<String>, String> {
+    let base_url = if settings.base_url.is_empty() {
+        match settings.provider.as_str() {
+            "deepseek" => "https://api.deepseek.com",
+            "minimax" => "https://api.minimax.io/v1",
+            _ => "",
+        }
+    } else {
+        settings.base_url.as_str()
+    };
+    if base_url.is_empty() {
+        return Err("Base URL is required".to_string());
+    }
+    let url = format!("{}/models", trim_slash(base_url));
+    let client = reqwest_client()?;
+    let mut request = client.get(url);
+    if !settings.api_key.is_empty() {
+        request = request.bearer_auth(&settings.api_key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|err| request_error_message(&settings.provider, err))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "{} returned {}",
+            settings.provider,
+            response.status()
+        ));
+    }
+    let data: Value = response.json().await.map_err(|err| err.to_string())?;
+    let models = data["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["id"].as_str().map(|id| id.to_string()))
+        .collect();
+    Ok(models)
+}
+
+async fn fetch_gemini_models(settings: &ModelSettings) -> Result<Vec<String>, String> {
+    if settings.api_key.is_empty() {
+        return Err("Gemini API key is required".to_string());
+    }
+    let base_url = if settings.base_url.is_empty() {
+        "https://generativelanguage.googleapis.com/v1beta"
+    } else {
+        settings.base_url.as_str()
+    };
+    let url = format!("{}/models?key={}", trim_slash(base_url), settings.api_key);
+    let client = reqwest_client()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| request_error_message("gemini", err))?;
+    if !response.status().is_success() {
+        return Err(format!("gemini returned {}", response.status()));
+    }
+    let data: Value = response.json().await.map_err(|err| err.to_string())?;
+    let models = data["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item["name"]
+                .as_str()
+                .map(|name| name.trim_start_matches("models/").to_string())
+        })
+        .collect();
+    Ok(models)
+}
+
+fn fallback_models(provider: &str) -> Vec<String> {
+    match provider {
+        "ollama" => vec!["qwen2.5:3b", "qwen2.5:7b", "llama3.2:3b", "gemma2:2b"],
+        "deepseek" => vec!["deepseek-chat", "deepseek-reasoner"],
+        "gemini" => vec!["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+        "minimax" => vec![
+            "MiniMax-M2.7-highspeed",
+            "MiniMax-M2",
+            "MiniMax-M2.5",
+            "MiniMax-M2.7",
+            "MiniMax-M2.1",
+            "MiniMax-M2.5-highspeed",
+        ],
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 async fn extract_with_openai_compatible(
     prompt: &str,
     settings: &ModelSettings,
@@ -753,7 +925,7 @@ async fn extract_with_openai_compatible(
     };
 
     let url = format!("{}/chat/completions", trim_slash(base_url));
-    let client = reqwest::Client::new();
+    let client = reqwest_client()?;
     let response = client
         .post(url)
         .bearer_auth(&settings.api_key)
@@ -765,7 +937,7 @@ async fn extract_with_openai_compatible(
         }))
         .send()
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| request_error_message(&settings.provider, err))?;
 
     if !response.status().is_success() {
         return Err(format!(
@@ -806,7 +978,7 @@ async fn extract_with_gemini(
         model,
         settings.api_key
     );
-    let client = reqwest::Client::new();
+    let client = reqwest_client()?;
     let response = client
         .post(url)
         .json(&json!({
@@ -818,7 +990,7 @@ async fn extract_with_gemini(
         }))
         .send()
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| request_error_message("gemini", err))?;
 
     if !response.status().is_success() {
         return Err(format!("Gemini returned {}", response.status()));
@@ -834,14 +1006,25 @@ async fn extract_with_gemini(
     })
 }
 
+fn reqwest_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|err| err.to_string())
+}
+
+fn request_error_message(provider: &str, err: reqwest::Error) -> String {
+    if err.is_timeout() {
+        format!("{} request timed out after 90 seconds", provider)
+    } else {
+        err.to_string()
+    }
+}
+
 fn parse_concepts(content: &str) -> Result<Vec<TypedConcept>, String> {
-    let cleaned = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let data: Value = serde_json::from_str(cleaned).map_err(|err| err.to_string())?;
+    let cleaned = clean_model_json_text(content);
+    let data: Value = serde_json::from_str(&cleaned).map_err(|err| err.to_string())?;
     let concepts = if data.is_array() {
         data.as_array()
     } else {
@@ -881,6 +1064,72 @@ fn parse_concepts(content: &str) -> Result<Vec<TypedConcept>, String> {
     }
 
     Ok(result)
+}
+
+fn clean_model_json_text(content: &str) -> String {
+    let cleaned = content
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    if serde_json::from_str::<Value>(cleaned).is_ok() {
+        return cleaned.to_string();
+    }
+
+    if let Some(after_think) = cleaned.rsplit_once("</think>").map(|(_, tail)| tail.trim()) {
+        if serde_json::from_str::<Value>(after_think).is_ok() {
+            return after_think.to_string();
+        }
+    }
+
+    extract_first_json_value(cleaned).unwrap_or_else(|| cleaned.to_string())
+}
+
+fn extract_first_json_value(text: &str) -> Option<String> {
+    for (start, ch) in text.char_indices() {
+        if ch != '{' && ch != '[' {
+            continue;
+        }
+        let expected_end = if ch == '{' { '}' } else { ']' };
+        let mut stack = vec![expected_end];
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, current) in text[start..].char_indices().skip(1) {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if current == '\\' {
+                    escaped = true;
+                } else if current == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match current {
+                '"' => in_string = true,
+                '{' => stack.push('}'),
+                '[' => stack.push(']'),
+                '}' | ']' => {
+                    if stack.pop() != Some(current) {
+                        break;
+                    }
+                    if stack.is_empty() {
+                        let end = start + offset + current.len_utf8();
+                        let candidate = &text[start..end];
+                        if serde_json::from_str::<Value>(candidate).is_ok() {
+                            return Some(candidate.to_string());
+                        }
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 fn trim_slash(value: &str) -> &str {

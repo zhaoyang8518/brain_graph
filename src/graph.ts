@@ -3,6 +3,8 @@ import { applyGraphVisualEncoding } from "./visualEncoding";
 import { type TypedConcept, extractConceptsWithModel, type ModelSettings } from "./model";
 import { buildProjectGraphInput, type ProjectInfo } from "./projects";
 
+const MODEL_REQUEST_TIMEOUT_SECONDS = 90;
+
 export type GraphNode = {
   id: string;
   label: string;
@@ -134,15 +136,19 @@ export async function buildBrainGraph(
       let extractedConcepts = 0;
       for (let index = 0; index < chunks.length; index += 1) {
         const percent = 25 + Math.round((index / Math.max(1, chunks.length)) * 45);
+        const startedAt = Date.now();
         onProgress(percent, `Extracting concepts with ${settings.provider} (${index + 1}/${chunks.length})...`, [
           `Current chunk: ${(index + 1).toLocaleString()} / ${chunks.length.toLocaleString()}.`,
           `Chunk size: ${chunks[index].length.toLocaleString()} chars.`,
-          `Concepts extracted so far: ${extractedConcepts.toLocaleString()}.`
+          `Concepts extracted so far: ${extractedConcepts.toLocaleString()}.`,
+          `Request timeout: ${MODEL_REQUEST_TIMEOUT_SECONDS}s.`
         ]);
         const result = await extractConceptsWithModel(chunks[index], settings);
+        const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
         modelConcepts.push(...result.concepts);
         extractedConcepts = modelConcepts.length;
         onProgress(percent + 1, `Extracted concepts with ${settings.provider} (${index + 1}/${chunks.length})`, [
+          `Elapsed: ${elapsedSeconds}s.`,
           `Latest chunk concepts: ${result.concepts.length.toLocaleString()}.`,
           `Total model concepts: ${extractedConcepts.toLocaleString()}.`,
           `Provider: ${result.providerUsed}.`

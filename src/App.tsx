@@ -45,6 +45,7 @@ import {
   loadModelSettings,
   saveModelSettings,
   extractConceptsWithModel,
+  testModelConnection,
   type ModelSettings,
   type ModelProvider
 } from "./model";
@@ -268,6 +269,8 @@ export default function App() {
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>(null);
   const [colorMode, setColorMode] = useState<NodeColorMode>("community");
   const [modelSettings, setModelSettings] = useState<ModelSettings>(loadModelSettings());
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelTestState, setModelTestState] = useState<{ loading: boolean; message: string; ok?: boolean }>({ loading: false, message: "" });
   const [status, setStatus] = useState<string>("");
   const [buildProgress, setBuildProgress] = useState<BuildProgressState | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
@@ -496,6 +499,21 @@ export default function App() {
     saveLanguage(language);
     setIsSettingsOpen(false);
     setStatus(t("settingsSaved") as string);
+  };
+
+  const handleTestModelConnection = async () => {
+    setModelTestState({ loading: true, message: "Testing connection and loading models..." });
+    try {
+      const result = await testModelConnection(modelSettings);
+      setAvailableModels(result.models);
+      if (result.models.length && !modelSettings.model) {
+        setModelSettings({ ...modelSettings, model: result.models[0] });
+      }
+      setModelTestState({ loading: false, ok: result.ok, message: result.message });
+    } catch (error) {
+      setAvailableModels([]);
+      setModelTestState({ loading: false, ok: false, message: `Connection test failed: ${error}` });
+    }
   };
 
   const startSidebarResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -981,13 +999,31 @@ export default function App() {
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium">{t("modelName")}</label>
-                    <input
-                      type="text"
-                      value={modelSettings.model}
-                      onChange={(e) => setModelSettings({ ...modelSettings, model: e.target.value })}
-                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                    />
+                    <Select value={modelSettings.model} onValueChange={(value) => setModelSettings({ ...modelSettings, model: value })}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableModels.map((model) => (
+                          <SelectItem key={model} value={model}>{model}</SelectItem>
+                        ))}
+                        {modelSettings.model && !availableModels.includes(modelSettings.model) && (
+                          <SelectItem value={modelSettings.model}>{modelSettings.model}</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Custom Model Name</label>
+                  <input
+                    type="text"
+                    value={modelSettings.model}
+                    onChange={(e) => setModelSettings({ ...modelSettings, model: e.target.value })}
+                    placeholder="Enter a model name manually"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  />
                 </div>
 
                 <div className="space-y-2">
@@ -1008,6 +1044,25 @@ export default function App() {
                     onChange={(e) => setModelSettings({ ...modelSettings, apiKey: e.target.value })}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleTestModelConnection}
+                    disabled={modelTestState.loading}
+                  >
+                    {modelTestState.loading ? "Testing..." : "测试连接并读取模型"}
+                  </Button>
+                  {modelTestState.message && (
+                    <span className={cn(
+                      "text-xs",
+                      modelTestState.ok ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"
+                    )}>
+                      {modelTestState.message}
+                    </span>
+                  )}
                 </div>
               </div>
             </TabsContent>
