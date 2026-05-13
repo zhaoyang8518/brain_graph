@@ -22,6 +22,15 @@ export type ProjectMarkdownDocument = {
   charCount: number;
 };
 
+export type LoadedProjectDocument = {
+  title: string;
+  path: string;
+  extension: string;
+  kind: "pdf" | "markdown";
+  markdown?: string | null;
+  filePath?: string | null;
+};
+
 export type ProjectChunk = {
   id: string;
   documentPath: string;
@@ -92,6 +101,13 @@ export async function refreshProject(path: string): Promise<ProjectInfo> {
     return invoke<ProjectInfo>("scan_project_documents", { path });
   }
   throw new Error("Project scanning is available in the Tauri desktop app.");
+}
+
+export async function loadProjectDocument(projectPath: string, documentPath: string): Promise<LoadedProjectDocument> {
+  if (isTauriRuntime()) {
+    return invoke<LoadedProjectDocument>("load_project_document", { projectPath, documentPath });
+  }
+  throw new Error("Document preview is available in the Tauri desktop app.");
 }
 
 export async function buildProjectGraphInput(path: string, options: BuildGraphInputOptions = {}): Promise<ProjectGraphInput> {

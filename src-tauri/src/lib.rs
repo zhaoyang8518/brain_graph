@@ -81,6 +81,17 @@ struct ProjectMarkdownDocument {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LoadedProjectDocument {
+    title: String,
+    path: String,
+    extension: String,
+    kind: String,
+    markdown: Option<String>,
+    file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProjectChunk {
     id: String,
     document_path: String,
@@ -117,6 +128,16 @@ struct SlideOutlineRequest {
     slide_count: usize,
     language: String,
     settings: ModelSettings,
+    semantic_evidence: Option<Vec<SlideEvidenceInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SlideEvidenceInput {
+    document_name: String,
+    chunk_index: usize,
+    text: String,
+    score: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -267,6 +288,108 @@ async fn open_project_folder() -> Result<Option<ProjectInfo>, String> {
 #[tauri::command]
 async fn scan_project_documents(path: String) -> Result<ProjectInfo, String> {
     scan_project_path(PathBuf::from(path))
+}
+
+#[tauri::command]
+async fn load_project_document(
+    project_path: String,
+    document_path: String,
+) -> Result<LoadedProjectDocument, String> {
+    let project_path = PathBuf::from(project_path);
+    let document_path = PathBuf::from(document_path);
+    let canonical_project = project_path.canonicalize().map_err(|err| err.to_string())?;
+    let canonical_document = document_path
+        .canonicalize()
+        .map_err(|err| err.to_string())?;
+    if !canonical_document.starts_with(&canonical_project) {
+        return Err("Document is outside the selected project.".to_string());
+    }
+
+    let name = canonical_document
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Document")
+        .to_string();
+    let extension = canonical_document
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !is_document_extension(&extension) {
+        return Err(format!("Unsupported document type: {}", extension));
+    }
+
+    if extension == "pdf" {
+        return Ok(LoadedProjectDocument {
+            title: name,
+            path: canonical_document.to_string_lossy().to_string(),
+            extension,
+            kind: "pdf".to_string(),
+            markdown: None,
+            file_path: Some(canonical_document.to_string_lossy().to_string()),
+        });
+    }
+
+    let size = fs::metadata(&canonical_document)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let document = ProjectDocument {
+        path: canonical_document.to_string_lossy().to_string(),
+        name,
+        extension,
+        size,
+    };
+    let source_hash = hash_file(&canonical_document)?;
+    let markdown_dir = project_markdown_dir(&canonical_project);
+    let config = load_project_build_config(&canonical_project)?;
+    let pending_documents: Vec<ProjectBuildDocument> = Vec::new();
+    let Some((markdown, markdown_path)) = ensure_document_markdown(
+        &document,
+        &source_hash,
+        false,
+        &project_cache_dir(&canonical_project),
+        &markdown_dir,
+        &config,
+        &pending_documents,
+    )?
+    else {
+        return Err(format!(
+            "Cannot preview {}. Please convert it to a supported Markdown-readable format.",
+            document.name
+        ));
+    };
+
+    let mut next_documents = config.documents;
+    if !next_documents
+        .iter()
+        .any(|entry| entry.source_path == document.path && entry.source_hash == source_hash)
+    {
+        next_documents.retain(|entry| entry.source_path != document.path);
+        next_documents.push(ProjectBuildDocument {
+            source_path: document.path.clone(),
+            source_hash,
+            markdown_path: markdown_path.to_string_lossy().to_string(),
+            name: document.name.clone(),
+            extension: document.extension.clone(),
+            size: document.size,
+        });
+        save_project_build_config(
+            &canonical_project,
+            &ProjectBuildConfig {
+                version: 1,
+                documents: next_documents,
+            },
+        )?;
+    }
+
+    Ok(LoadedProjectDocument {
+        title: document.name,
+        path: document.path,
+        extension: document.extension,
+        kind: "markdown".to_string(),
+        markdown: Some(markdown),
+        file_path: Some(markdown_path.to_string_lossy().to_string()),
+    })
 }
 
 #[tauri::command]
@@ -534,6 +657,7 @@ pub fn run() {
             generate_slide_outline,
             open_project_folder,
             scan_project_documents,
+            load_project_document,
             build_project_graph_input,
             save_project_graph,
             load_project_graph,
@@ -1159,6 +1283,24 @@ fn make_slide_outline_context(
             break;
         }
     }
+    let semantic_evidence = request
+        .semantic_evidence
+        .as_ref()
+        .map(|items| {
+            items
+                .iter()
+                .take(10)
+                .map(|item| {
+                    json!({
+                        "document": item.document_name,
+                        "chunkIndex": item.chunk_index,
+                        "score": item.score,
+                        "text": limit_text(item.text.clone(), 900)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     json!({
         "question": request.question,
@@ -1185,7 +1327,8 @@ fn make_slide_outline_context(
                 "weight": edge.weight
             })).collect::<Vec<_>>()
         },
-        "evidence": evidence
+        "evidence": evidence,
+        "semanticEvidence": semantic_evidence
     })
 }
 
@@ -1211,229 +1354,6 @@ Context JSON:
         request.audience,
         serde_json::to_string(context).unwrap_or_else(|_| "{}".to_string())
     )
-}
-
-fn make_slide_outline_repair_prompt(
-    invalid_json: &Value,
-    context: &Value,
-    request: &SlideOutlineRequest,
-) -> String {
-    format!(
-        r#"The previous response is valid JSON but it is NOT a slide outline.
-
-Rewrite it into a slide outline JSON. Do not return graph nodes or edges.
-
-Required root schema:
-{{
-  "title": "deck title",
-  "audience": "{}",
-  "goal": "deck goal",
-  "language": "{}",
-  "slides": [
-    {{
-      "index": 1,
-      "title": "slide title",
-      "purpose": "why this slide exists",
-      "bullets": ["short point"],
-      "visual": {{"type": "summary_cards", "reason": "why"}},
-      "evidence": [],
-      "speakerNotes": "brief talk track"
-    }}
-  ]
-}}
-
-Create about {} slides. Answer this user question:
-{}
-
-Invalid JSON returned by the model:
-{}
-
-Context:
-{}"#,
-        request.audience,
-        request.language,
-        request.slide_count,
-        request.question,
-        limit_text(invalid_json.to_string(), 1800),
-        serde_json::to_string(context).unwrap_or_else(|_| "{}".to_string())
-    )
-}
-
-fn is_valid_slide_outline(value: &Value) -> bool {
-    let Some(slides) = value.get("slides").and_then(Value::as_array) else {
-        return false;
-    };
-    if slides.is_empty() {
-        return false;
-    }
-    slides.iter().all(|slide| {
-        slide.get("title").and_then(Value::as_str).is_some()
-            && slide.get("bullets").and_then(Value::as_array).is_some()
-    })
-}
-
-fn normalize_slide_outline(value: Value, request: &SlideOutlineRequest) -> Option<Value> {
-    let candidate = unwrap_slide_outline_candidate(&value);
-    if is_valid_slide_outline(candidate) {
-        return Some(complete_slide_outline_defaults(candidate.clone(), request));
-    }
-
-    if let Some(slides) = candidate.get("slides").and_then(Value::as_array) {
-        let normalized_slides: Vec<Value> = slides
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slide)| normalize_slide_item(slide, index + 1))
-            .collect();
-        if !normalized_slides.is_empty() {
-            return Some(json!({
-                "title": candidate.get("title").and_then(Value::as_str).unwrap_or("幻灯片大纲"),
-                "audience": candidate.get("audience").and_then(Value::as_str).unwrap_or(&request.audience),
-                "goal": candidate.get("goal").and_then(Value::as_str).unwrap_or("基于项目知识图谱生成汇报大纲"),
-                "language": candidate.get("language").and_then(Value::as_str).unwrap_or(&request.language),
-                "slides": normalized_slides
-            }));
-        }
-    }
-
-    None
-}
-
-fn unwrap_slide_outline_candidate(value: &Value) -> &Value {
-    for key in ["slides", "title"] {
-        if value.get(key).is_some() {
-            return value;
-        }
-    }
-    for key in ["response", "outline", "deck", "result", "data"] {
-        if let Some(inner) = value.get(key) {
-            let candidate = unwrap_slide_outline_candidate(inner);
-            if candidate.get("slides").is_some() || candidate.get("title").is_some() {
-                return candidate;
-            }
-        }
-    }
-    value
-}
-
-fn complete_slide_outline_defaults(value: Value, request: &SlideOutlineRequest) -> Value {
-    json!({
-        "title": value.get("title").and_then(Value::as_str).unwrap_or("幻灯片大纲"),
-        "audience": value.get("audience").and_then(Value::as_str).unwrap_or(&request.audience),
-        "goal": value.get("goal").and_then(Value::as_str).unwrap_or("基于项目知识图谱生成汇报大纲"),
-        "language": value.get("language").and_then(Value::as_str).unwrap_or(&request.language),
-        "slides": value.get("slides").and_then(Value::as_array).cloned().unwrap_or_default()
-    })
-}
-
-fn normalize_slide_item(slide: &Value, fallback_index: usize) -> Option<Value> {
-    let title = slide
-        .get("title")
-        .or_else(|| slide.get("标题"))
-        .or_else(|| slide.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if title.is_empty() {
-        return None;
-    }
-    let bullets = slide
-        .get("bullets")
-        .or_else(|| slide.get("要点"))
-        .or_else(|| slide.get("points"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Some(json!({
-        "index": slide.get("index").and_then(Value::as_u64).unwrap_or(fallback_index as u64),
-        "title": title,
-        "purpose": slide.get("purpose").or_else(|| slide.get("目的")).and_then(Value::as_str).unwrap_or("说明本页主题"),
-        "bullets": bullets,
-        "visual": slide.get("visual").cloned().unwrap_or_else(|| json!({"type": "summary_cards", "reason": "适合展示关键要点"})),
-        "evidence": slide.get("evidence").cloned().unwrap_or_else(|| json!([])),
-        "speakerNotes": slide.get("speakerNotes").or_else(|| slide.get("speaker_notes")).or_else(|| slide.get("讲稿")).and_then(Value::as_str).unwrap_or("")
-    }))
-}
-
-fn make_fallback_slide_outline(
-    context: &Value,
-    request: &SlideOutlineRequest,
-    error: &str,
-) -> Value {
-    let top_concepts: Vec<String> = context["graphSummary"]["topConcepts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .take(8)
-        .map(str::to_string)
-        .collect();
-    let evidence: Vec<Value> = context["evidence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .take(6)
-        .cloned()
-        .collect();
-    let mut slides = vec![
-        json!({
-            "index": 1,
-            "title": "项目知识图谱概览",
-            "purpose": "建立听众对项目主题和图谱规模的整体认知",
-            "bullets": [
-                format!("图谱包含 {} 个节点、{} 条关系。", context["graphSummary"]["nodes"].as_u64().unwrap_or(0), context["graphSummary"]["edges"].as_u64().unwrap_or(0)),
-                format!("核心概念包括：{}。", top_concepts.iter().take(5).cloned().collect::<Vec<_>>().join("、")),
-                "该大纲由本地 fallback 生成，原因是模型返回内容无法解析为 JSON。"
-            ],
-            "visual": {"type": "network", "reason": "适合展示项目核心概念及关系结构"},
-            "evidence": [],
-            "speakerNotes": "先说明图谱来源、分析范围和本次汇报目标。"
-        }),
-        json!({
-            "index": 2,
-            "title": "核心主题与关键概念",
-            "purpose": "提炼项目中最重要的主题簇",
-            "bullets": top_concepts.iter().take(6).map(|concept| format!("{} 是图谱中的高优先级概念。", concept)).collect::<Vec<_>>(),
-            "visual": {"type": "summary_cards", "reason": "适合展示多个核心主题"},
-            "evidence": evidence,
-            "speakerNotes": "围绕高频和高 PageRank 概念解释项目主线。"
-        }),
-    ];
-
-    let target = request.slide_count.clamp(3, 20);
-    while slides.len() < target {
-        let index = slides.len() + 1;
-        let concept = top_concepts
-            .get((index - 3) % top_concepts.len().max(1))
-            .cloned()
-            .unwrap_or_else(|| "关键主题".to_string());
-        slides.push(json!({
-            "index": index,
-            "title": format!("{}：证据与行动建议", concept),
-            "purpose": "围绕一个关键主题展开证据和建议",
-            "bullets": [
-                format!("梳理 {} 在项目文档中的主要上下文。", concept),
-                "结合相关节点和证据片段识别风险、机会或下一步工作。",
-                "将发现转化为可执行的管理建议。"
-            ],
-            "visual": {"type": "table", "reason": "适合组织主题、证据和建议"},
-            "evidence": [],
-            "speakerNotes": "这一页需要后续由模型或人工补充更具体的证据引用。"
-        }));
-    }
-
-    json!({
-        "title": format!("{} - 幻灯片大纲", request.question),
-        "audience": request.audience,
-        "goal": "基于项目知识图谱生成可编辑的汇报大纲",
-        "language": request.language,
-        "warning": format!("Model JSON parsing failed: {}", error),
-        "slides": slides
-    })
 }
 
 async fn extract_with_ollama(
@@ -1641,7 +1561,10 @@ async fn extract_with_openai_compatible(
     })
 }
 
-async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Result<Value, String> {
+async fn complete_text_with_model(
+    prompt: &str,
+    settings: &ModelSettings,
+) -> Result<String, String> {
     match settings.provider.as_str() {
         "ollama" => {
             let url = format!("{}/api/chat", trim_slash(&settings.base_url));
@@ -1651,7 +1574,6 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
                 .json(&json!({
                     "model": settings.model,
                     "stream": false,
-                    "format": "json",
                     "messages": [{"role": "user", "content": prompt}]
                 }))
                 .send()
@@ -1661,8 +1583,10 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
                 return Err(format!("Ollama returned {}", response.status()));
             }
             let data: Value = response.json().await.map_err(|err| err.to_string())?;
-            let content = data["message"]["content"].as_str().unwrap_or("");
-            parse_model_json_value(content, &data)
+            Ok(data["message"]["content"]
+                .as_str()
+                .unwrap_or("")
+                .to_string())
         }
         "gemini" => {
             let model = if settings.model.is_empty() {
@@ -1685,7 +1609,7 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
             let response = client
                 .post(url)
                 .json(&json!({
-                    "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+                    "generationConfig": {"temperature": 0.2},
                     "contents": [{"parts": [{"text": prompt}]}]
                 }))
                 .send()
@@ -1695,10 +1619,10 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
                 return Err(format!("Gemini returned {}", response.status()));
             }
             let data: Value = response.json().await.map_err(|err| err.to_string())?;
-            let content = data["candidates"][0]["content"]["parts"][0]["text"]
+            Ok(data["candidates"][0]["content"]["parts"][0]["text"]
                 .as_str()
-                .unwrap_or("");
-            parse_model_json_value(content, &data)
+                .unwrap_or("")
+                .to_string())
         }
         _ => {
             let base_url = if settings.base_url.is_empty() {
@@ -1710,6 +1634,9 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
             } else {
                 settings.base_url.as_str()
             };
+            if base_url.is_empty() {
+                return Err("Base URL is required".to_string());
+            }
             let url = format!("{}/chat/completions", trim_slash(base_url));
             let client = reqwest_client()?;
             let response = client
@@ -1718,7 +1645,6 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
                 .json(&json!({
                     "model": settings.model,
                     "temperature": 0.2,
-                    "response_format": {"type": "json_object"},
                     "messages": [{"role": "user", "content": prompt}]
                 }))
                 .send()
@@ -1732,30 +1658,66 @@ async fn complete_json_with_model(prompt: &str, settings: &ModelSettings) -> Res
                 ));
             }
             let data: Value = response.json().await.map_err(|err| err.to_string())?;
-            let content = data["choices"][0]["message"]["content"]
+            Ok(data["choices"][0]["message"]["content"]
                 .as_str()
-                .unwrap_or("");
-            parse_model_json_value(content, &data)
+                .unwrap_or("")
+                .to_string())
         }
     }
 }
 
-fn parse_model_json_value(content: &str, response_data: &Value) -> Result<Value, String> {
-    let cleaned = clean_model_json_text(content);
-    if cleaned.trim().is_empty() {
-        return Err(format!(
-            "Model returned empty content. Raw response excerpt: {}",
-            limit_text(response_data.to_string(), 600)
+fn clean_model_markdown_text(content: &str) -> String {
+    let mut cleaned = content.trim().to_string();
+    if let Some(after_think) = cleaned.rsplit_once("</think>").map(|(_, tail)| tail.trim()) {
+        cleaned = after_think.to_string();
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+        let without_start = trimmed
+            .trim_start_matches("```markdown")
+            .trim_start_matches("```md")
+            .trim_start_matches("```")
+            .trim();
+        return without_start.trim_end_matches("```").trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn make_fallback_slide_outline_markdown(
+    context: &Value,
+    request: &SlideOutlineRequest,
+    reason: &str,
+) -> String {
+    let top_concepts = context["graphSummary"]["topConcepts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .take(8)
+        .collect::<Vec<_>>();
+    let mut sections = vec![
+        format!("# {} - 幻灯片大纲", request.question),
+        format!("- 受众：{}", request.audience),
+        "- 目标：基于项目知识图谱生成可编辑的汇报大纲".to_string(),
+        format!("> 模型生成失败，以下为本地图谱 fallback 草稿：{}", reason),
+        "## 页面大纲".to_string(),
+    ];
+    let slide_count = request.slide_count.clamp(3, 12);
+    for index in 0..slide_count {
+        let concept = top_concepts
+            .get(index % top_concepts.len().max(1))
+            .copied()
+            .unwrap_or("项目主题");
+        sections.push(format!(
+            "### {}. {}\n- 目的：围绕项目资料中的关键主题建立管理层理解。\n- 关键点：结合文档证据说明 `{}` 的背景、影响和待验证事项。\n- 建议视觉：summary_cards。\n- 讲稿提示：先说明该主题来自项目文档和图谱，再补充需要人工核验的业务含义。",
+            index + 1,
+            concept,
+            concept
         ));
     }
-    serde_json::from_str(&cleaned).map_err(|err| {
-        format!(
-            "Model returned non-JSON content: {}. Content excerpt: {}",
-            err,
-            limit_text(content.to_string(), 600)
-        )
-    })
+    sections.join("\n\n")
 }
+
 
 async fn extract_with_gemini(
     prompt: &str,
